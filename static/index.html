@@ -1,0 +1,624 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon"
+        href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%23e50914'/%3E%3Ctext x='32' y='45' font-family='Arial, sans-serif' font-size='38' font-weight='900' fill='%23ffffff' text-anchor='middle'%3EG%3C/text%3E%3C/svg%3E">
+    <title>GoFlix - Watch Movies &amp; TV Shows</title>
+    <meta name="description"
+        content="GoFlix — stream trending movies and TV shows instantly. Browse by category, search, and create your personal watchlist.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800;900&family=Inter:wght@300;400;500;600;700;800&display=swap"
+        rel="stylesheet">
+    <link rel="stylesheet" href="/css/index.css">
+</head>
+
+<body>
+    <a class="skip-link" href="#carousels-container">Skip to content</a>
+
+    <!-- Page Loading Screen -->
+    <div id="page-loader" class="page-loader" aria-hidden="true">
+        <div class="page-loader-inner">
+            <div class="page-loader-logo">GOFLIX</div>
+            <div class="page-loader-bar">
+                <div class="page-loader-bar-fill"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Navigation -->
+    <nav id="navbar">
+        <div class="nav-content">
+            <h1 class="logo">GOFLIX</h1>
+            <ul class="nav-links" id="primary-navigation">
+                <li><a href="#" class="active" data-page="home" id="nav-home">Home</a></li>
+                <li><a href="#" data-page="tvshows" id="nav-tvshows">TV Shows</a></li>
+                <li><a href="#" data-page="movies" id="nav-movies">Movies</a></li>
+                <li><a href="#" data-page="popular" id="nav-popular">New &amp; Popular</a></li>
+                <li><a href="#" data-page="mylist" id="nav-mylist">My List</a></li>
+            </ul>
+        </div>
+        <div class="nav-actions">
+            <button class="icon-btn" id="search-toggle" aria-label="Search" title="Search">
+                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none"
+                    stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="11" cy="11" r="8"></circle>
+                    <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                </svg>
+            </button>
+            <div class="profile-wrap" id="profile-wrap">
+                <button class="profile" id="profile-btn" aria-haspopup="menu" aria-expanded="false"
+                    aria-controls="profile-menu" aria-label="Account menu">
+                    <img src="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2064%2064%22%3E%3Crect%20width%3D%2264%22%20height%3D%2264%22%20rx%3D%2212%22%20fill%3D%22%23e50914%22%2F%3E%3Ctext%20x%3D%2232%22%20y%3D%2245%22%20font-family%3D%22Arial%2C%20sans-serif%22%20font-size%3D%2238%22%20font-weight%3D%22900%22%20fill%3D%22%23ffffff%22%20text-anchor%3D%22middle%22%3EG%3C%2Ftext%3E%3C%2Fsvg%3E"
+                        alt="" width="32" height="32">
+                    <span class="profile-caret">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none"
+                            stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+                            <polyline points="6 9 12 15 18 9"></polyline>
+                        </svg>
+                    </span>
+                </button>
+                <div class="profile-menu" id="profile-menu" role="menu" aria-label="Account menu">
+                    <button type="button" role="menuitem" id="profile-menu-mylist">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none"
+                            stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <rect x="3" y="3" width="7" height="7"></rect>
+                            <rect x="14" y="3" width="7" height="7"></rect>
+                            <rect x="14" y="14" width="7" height="7"></rect>
+                            <rect x="3" y="14" width="7" height="7"></rect>
+                        </svg>
+                        My List
+                    </button>
+                    <button type="button" role="menuitem" id="profile-menu-account">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none"
+                            stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+                            <circle cx="12" cy="7" r="4"></circle>
+                        </svg>
+                        Account
+                    </button>
+                    <div class="profile-menu-divider"></div>
+                    <button type="button" role="menuitem" id="profile-menu-signout">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none"
+                            stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
+                            <polyline points="16 17 21 12 16 7"></polyline>
+                            <line x1="21" y1="12" x2="9" y2="12"></line>
+                        </svg>
+                        Sign Out
+                    </button>
+                </div>
+            </div>
+            <button class="icon-btn mobile-nav-toggle" id="mobile-nav-toggle" aria-label="Open navigation"
+                aria-controls="primary-navigation" aria-expanded="false">
+                <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"
+                    aria-hidden="true">
+                    <path d="M4 7h16M4 12h16M4 17h16"></path>
+                </svg>
+            </button>
+        </div>
+    </nav>
+
+    <!-- Search Overlay -->
+    <div id="search-overlay" class="search-overlay" role="dialog" aria-modal="true" aria-labelledby="search-input"
+        aria-hidden="true">
+        <div class="search-overlay-inner">
+            <div class="search-bar-wrap">
+                <svg class="search-icon-inside" xmlns="http://www.w3.org/2000/svg" width="20" height="20"
+                    viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                    stroke-linejoin="round">
+                    <circle cx="11" cy="11" r="8"></circle>
+                    <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                </svg>
+                <input type="text" id="search-input" class="search-input" placeholder="Search movies, TV shows…"
+                    autocomplete="off" spellcheck="false">
+                <button class="search-close-btn" id="search-close" aria-label="Close search">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none"
+                        stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                </button>
+            </div>
+            <div id="search-results-area" class="search-results-area">
+                <div id="search-placeholder" class="search-placeholder">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none"
+                        stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="11" cy="11" r="8"></circle>
+                        <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                    </svg>
+                    <p>Type to search movies and TV shows</p>
+                </div>
+                <div id="search-loading" class="search-loading" style="display:none">
+                    <div class="search-spinner"></div>
+                </div>
+                <div id="search-results-grid" class="search-results-grid"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Hero Section -->
+    <header id="hero">
+        <!-- Crossfade layer for smooth background transitions -->
+        <div id="hero-bg-layer" class="hero-bg-layer"></div>
+        <div class="hero-overlay"></div>
+        <!-- Clickable area on the banner itself (behind content) -->
+        <div id="hero-click-area" class="hero-click-area" aria-label="More info" role="button" tabindex="0"></div>
+        <div class="hero-content">
+            <div class="hero-badge-row">
+                <span class="hero-type-badge" id="hero-type-badge"></span>
+            </div>
+            <h2 id="hero-title">Loading...</h2>
+            <p id="hero-desc"></p>
+            <div class="hero-meta-row" id="hero-meta-row"></div>
+            <div class="hero-buttons">
+                <button id="hero-play" class="btn btn-primary" aria-label="Play selected title">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24"
+                        fill="currentColor">
+                        <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                    </svg>
+                    Play
+                </button>
+                <button id="hero-info" class="btn btn-secondary" aria-label="Show selected title details">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none"
+                        stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="12" cy="12" r="10"></circle>
+                        <line x1="12" y1="16" x2="12" y2="12"></line>
+                        <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                    </svg>
+                    More Info
+                </button>
+                <button id="hero-add-list" class="btn btn-ghost" title="Add to My List">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none"
+                        stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="12" y1="5" x2="12" y2="19"></line>
+                        <line x1="5" y1="12" x2="19" y2="12"></line>
+                    </svg>
+                    My List
+                </button>
+            </div>
+        </div>
+        <!-- Hero dots for rotation with progress indicator -->
+        <div id="hero-dots" class="hero-dots"></div>
+    </header>
+
+    <!-- Carousels Container -->
+    <main id="carousels-container" tabindex="-1">
+        <!-- Dynamically injected rows go here -->
+    </main>
+
+    <!-- My List Empty State -->
+    <div id="mylist-empty" class="mylist-empty" style="display:none">
+        <div class="mylist-empty-inner">
+            <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 24 24" fill="none"
+                stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"></path>
+            </svg>
+            <h3>Your list is empty</h3>
+            <p>Add movies and TV shows to your list by clicking the bookmark icon on any title.</p>
+            <button class="btn btn-primary" id="mylist-browse-btn">Browse Content</button>
+        </div>
+    </div>
+
+    <!-- ═══ Detail / More Info Modal ═══ -->
+    <div id="detail-modal" class="detail-modal" role="dialog" aria-modal="true" aria-labelledby="detail-title"
+        aria-hidden="true">
+        <div class="detail-modal-backdrop" id="detail-modal-backdrop"></div>
+        <div class="detail-modal-card" id="detail-modal-card">
+
+            <!-- Close button -->
+            <button class="detail-close-btn" id="detail-close" aria-label="Close">
+                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none"
+                    stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                </svg>
+            </button>
+
+            <!-- Hero / Trailer section -->
+            <div class="detail-hero" id="detail-hero">
+                <div class="detail-hero-overlay"></div>
+                <!-- Trailer iframe (shown when trailer available) -->
+                <div class="detail-trailer-wrap" id="detail-trailer-wrap" style="display:none">
+                    <iframe id="detail-trailer-iframe" allow="autoplay; encrypted-media; fullscreen; picture-in-picture"
+                        allowfullscreen frameborder="0">
+                    </iframe>
+                </div>
+                <div class="detail-hero-bottom">
+                    <h2 id="detail-title"></h2>
+                    <div class="detail-tagline" id="detail-tagline"></div>
+                    <div class="detail-actions">
+                        <button id="detail-play" class="btn btn-primary">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24"
+                                fill="currentColor">
+                                <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                            </svg>
+                            Play
+                        </button>
+                        <button id="detail-add-list" class="btn btn-outline-circle" title="Add to My List"
+                            aria-label="Add to My List">
+                            <svg id="detail-list-icon-add" xmlns="http://www.w3.org/2000/svg" width="18" height="18"
+                                viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                                stroke-linecap="round" stroke-linejoin="round">
+                                <line x1="12" y1="5" x2="12" y2="19"></line>
+                                <line x1="5" y1="12" x2="19" y2="12"></line>
+                            </svg>
+                            <svg id="detail-list-icon-check" xmlns="http://www.w3.org/2000/svg" width="18" height="18"
+                                viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
+                                stroke-linecap="round" stroke-linejoin="round" style="display:none">
+                                <polyline points="20 6 9 17 4 12"></polyline>
+                            </svg>
+                        </button>
+                        <!-- Trailer toggle button (only when trailer available) -->
+                        <button id="detail-trailer-btn" class="btn btn-ghost detail-trailer-toggle" style="display:none"
+                            title="Watch Trailer">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24"
+                                fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                                stroke-linejoin="round">
+                                <polygon points="23 7 16 12 23 17 23 7"></polygon>
+                                <rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect>
+                            </svg>
+                            Trailer
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Metadata bar -->
+            <div class="detail-meta-bar" id="detail-meta-bar">
+                <div class="detail-meta-left">
+                    <span class="detail-rating" id="detail-rating"></span>
+                    <span class="detail-year" id="detail-year"></span>
+                    <span class="detail-runtime" id="detail-runtime"></span>
+                </div>
+                <div class="detail-genres" id="detail-genres"></div>
+            </div>
+
+            <!-- Overview -->
+            <div class="detail-body">
+                <p id="detail-desc" class="detail-overview"></p>
+            </div>
+
+            <!-- Cast row -->
+            <div class="detail-section" id="detail-cast-section" style="display:none">
+                <h4 class="detail-section-title">Cast</h4>
+                <div class="detail-cast-row" id="detail-cast-row"></div>
+            </div>
+
+            <!-- Episodes section (TV only) -->
+            <div class="detail-section detail-episodes-section" id="detail-episodes-section" style="display:none">
+                <div class="detail-episodes-header">
+                    <h4 class="detail-section-title">Episodes</h4>
+                    <div class="detail-episodes-controls">
+                        <div class="detail-season-select-wrap">
+                            <select id="detail-season-select" class="detail-season-select"
+                                aria-label="Select season"></select>
+                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24"
+                                fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"
+                                stroke-linejoin="round">
+                                <polyline points="6 9 12 15 18 9"></polyline>
+                            </svg>
+                        </div>
+                        <div class="detail-ep-search-wrap">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24"
+                                fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                                stroke-linejoin="round">
+                                <circle cx="11" cy="11" r="8"></circle>
+                                <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                            </svg>
+                            <input type="text" id="detail-ep-search" class="detail-ep-search"
+                                placeholder="Search episode...">
+                        </div>
+                    </div>
+                </div>
+                <div class="detail-episode-list" id="detail-episode-list">
+                    <div class="detail-ep-loading" id="detail-ep-loading">
+                        <div class="detail-ep-spinner"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Related content -->
+            <div class="detail-section" id="detail-related-section" style="display:none">
+                <h4 class="detail-section-title">More Like This</h4>
+                <div class="detail-related-row" id="detail-related-row"></div>
+            </div>
+
+        </div>
+    </div>
+
+
+
+    <!-- Netflix-Style Full-Screen Player -->
+    <div id="player-modal" class="player-modal" role="dialog" aria-modal="true" aria-labelledby="player-movie-title"
+        aria-hidden="true">
+        <div class="player-controls-top" id="player-controls-top">
+            <button class="player-back-btn" id="close-player" aria-label="Close player">
+                <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none"
+                    stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="15 18 9 12 15 6"></polyline>
+                </svg>
+            </button>
+            <div class="player-meta">
+                <span class="player-movie-title" id="player-movie-title">Loading…</span>
+                <span class="player-movie-subtitle" id="player-movie-subtitle" hidden></span>
+            </div>
+            <div class="player-top-right">
+                <button class="player-btn-tv" id="player-next-ep" title="Next Episode" style="display:none">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none"
+                        stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                        <polygon points="5 4 15 12 5 20 5 4"></polygon>
+                        <line x1="19" y1="5" x2="19" y2="19"></line>
+                    </svg>
+                    <span>Next Episode</span>
+                </button>
+                <button class="player-btn-tv" id="player-ep-list-btn" title="Episodes" aria-expanded="false"
+                    aria-controls="player-ep-panel" style="display:none">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none"
+                        stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="8" y1="6" x2="21" y2="6"></line>
+                        <line x1="8" y1="12" x2="21" y2="12"></line>
+                        <line x1="8" y1="18" x2="21" y2="18"></line>
+                        <line x1="3" y1="6" x2="3.01" y2="6"></line>
+                        <line x1="3" y1="12" x2="3.01" y2="12"></line>
+                        <line x1="3" y1="18" x2="3.01" y2="18"></line>
+                    </svg>
+                    <span>Episodes</span>
+                </button>
+            </div>
+        </div>
+
+        <div class="player-ep-panel" id="player-ep-panel">
+            <div class="player-ep-panel-header">
+                <div class="player-ep-panel-heading">
+                    <div class="player-ep-panel-title-wrap">
+                        <div class="player-ep-panel-title">Episodes</div>
+                        <div class="player-ep-panel-subtitle">Choose an episode to watch</div>
+                    </div>
+                    <button class="player-ep-panel-close" id="player-ep-panel-close" aria-label="Close episode list">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none"
+                            stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                            <line x1="18" y1="6" x2="6" y2="18"></line>
+                            <line x1="6" y1="6" x2="18" y2="18"></line>
+                        </svg>
+                    </button>
+                </div>
+                <div class="player-season-picker" id="player-season-picker">
+                    <button type="button" class="player-season-trigger" id="player-season-trigger"
+                        aria-haspopup="listbox" aria-expanded="false">
+                        <span id="player-season-current">Season</span>
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2" stroke-linecap="round">
+                            <polyline points="6 9 12 15 18 9"></polyline>
+                        </svg>
+                    </button>
+                    <select class="player-ep-season-select player-native-select" id="player-ep-season-select"
+                        aria-hidden="true" tabindex="-1"></select>
+                    <div class="player-season-menu" id="player-season-menu" role="listbox" aria-label="Select season">
+                    </div>
+                </div>
+            </div>
+            <div class="player-ep-list" id="player-ep-list">
+                <div class="player-ep-loading" id="player-ep-loading">
+                    <div class="player-spinner" style="width:28px;height:28px;border-width:3px"></div>
+                </div>
+            </div>
+        </div>
+
+        <button class="player-center-play" id="player-center-play" aria-label="Play or pause">
+            <svg id="player-center-play-icon" width="32" height="32" viewBox="0 0 24 24" fill="currentColor">
+                <polygon points="8,5 19,12 8,19"></polygon>
+            </svg>
+        </button>
+        <video id="vix-player" playsinline preload="auto"></video>
+
+        <!-- Netflix-style double-tap-to-seek zones (mobile) / double-click (desktop) -->
+        <button type="button" class="player-seek-zone player-seek-zone-left" id="player-seek-zone-left"
+            aria-label="Double-tap to rewind 10 seconds" tabindex="-1">
+            <div class="player-seek-indicator" id="player-seek-indicator-left">
+                <span class="player-seek-icon">
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M11.5 18.5V5.5l-8.25 6.5 8.25 6.5Z"></path>
+                        <path d="M21 18.5V5.5l-8.25 6.5L21 18.5Z"></path>
+                    </svg>
+                </span>
+                <span class="player-seek-amount" id="player-seek-amount-left">10 seconds</span>
+            </div>
+        </button>
+        <button type="button" class="player-seek-zone player-seek-zone-right" id="player-seek-zone-right"
+            aria-label="Double-tap to forward 10 seconds" tabindex="-1">
+            <div class="player-seek-indicator" id="player-seek-indicator-right">
+                <span class="player-seek-icon">
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M12.5 5.5v13l8.25-6.5-8.25-6.5Z"></path>
+                        <path d="M3 5.5v13l8.25-6.5L3 5.5Z"></path>
+                    </svg>
+                </span>
+                <span class="player-seek-amount" id="player-seek-amount-right">10 seconds</span>
+            </div>
+        </button>
+
+        <div class="player-controls-bottom" id="player-controls-bottom">
+            <div class="player-progress-wrap">
+                <span class="player-time" id="player-time-current">0:00</span>
+                <input id="player-progress" class="player-progress" type="range" min="0" max="100" value="0" step="0.1"
+                    aria-label="Seek">
+                <span class="player-time player-time-duration" id="player-time-duration">0:00</span>
+            </div>
+            <div class="player-control-row">
+                <div class="player-controls-left">
+                    <button class="player-icon-btn player-play-btn" id="player-play" aria-label="Play or pause">
+                        <svg id="player-play-icon" width="26" height="26" viewBox="0 0 24 24" fill="currentColor">
+                            <polygon points="8,5 19,12 8,19"></polygon>
+                        </svg>
+                    </button>
+                    <div class="player-volume-wrap">
+                        <button class="player-icon-btn" id="player-mute" aria-label="Mute" title="Mute">
+                            <svg id="player-volume-icon" width="22" height="22" viewBox="0 0 24 24" fill="none"
+                                stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M11 5 6 9H3v6h3l5 4V5Z"></path>
+                                <path d="M15.5 8.5a5 5 0 0 1 0 7"></path>
+                                <path d="M18.5 6a8.5 8.5 0 0 1 0 12"></path>
+                            </svg>
+                        </button>
+                        <input id="player-volume" class="player-volume" type="range" min="0" max="1" value="1"
+                            step="0.01" aria-label="Volume">
+                    </div>
+                </div>
+                <div class="player-controls-right">
+                    <div class="player-track-picker" id="player-audio-picker">
+                        <button type="button" class="player-icon-btn player-audio-trigger" id="player-audio-trigger"
+                            aria-haspopup="listbox" aria-expanded="false" aria-label="Audio" title="Audio">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                <path
+                                    d="M3 14h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-7a9 9 0 0 1 18 0v7a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3">
+                                </path>
+                            </svg>
+                            <span class="player-track-label" id="player-audio-current">Original</span>
+                        </button>
+                        <div class="player-track-menu" id="player-audio-menu" role="listbox" aria-label="Audio tracks">
+                        </div>
+                    </div>
+                    <div class="player-track-picker" id="player-subtitle-picker">
+                        <button type="button" class="player-icon-btn" id="player-subtitle-trigger"
+                            aria-haspopup="listbox" aria-expanded="false" aria-label="Subtitles" title="Subtitles">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                <rect x="3" y="5" width="18" height="14" rx="2"></rect>
+                                <path d="M7 10h3M14 10h3M7 14h5M15 14h2"></path>
+                            </svg>
+                            <span class="player-sr-only" id="player-subtitle-current">Off</span>
+                        </button>
+                        <div class="player-track-menu" id="player-subtitle-menu" role="listbox"
+                            aria-label="Subtitle tracks"></div>
+                    </div>
+                    <div class="player-server-picker" id="player-server-picker">
+                        <button type="button" class="player-icon-btn" id="player-server-trigger" aria-haspopup="listbox"
+                            aria-expanded="false" aria-label="Playback server" title="Server">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                <rect x="3" y="4" width="18" height="6" rx="2"></rect>
+                                <rect x="3" y="14" width="18" height="6" rx="2"></rect>
+                                <path d="M7 7h.01M7 17h.01"></path>
+                            </svg>
+                            <span class="player-sr-only" id="player-server-current">VidKing</span>
+                        </button>
+                        <select id="player-server-select" class="player-native-select" aria-hidden="true" tabindex="-1">
+                            <option value="vidking" selected>VidKing</option>
+                            <option value="vidlove">VidLove</option>
+                            <option value="vixsrc">VixSrc</option>
+                        </select>
+                        <div class="player-server-menu" id="player-server-menu" role="listbox"
+                            aria-label="Playback server">
+                            <button type="button" role="option" data-server="vidking" aria-selected="true"><span
+                                    class="server-option-dot"></span><span><strong>VidKing</strong><small>Highest
+                                        Quality (4K / 1080p HD)</small></span><svg class="server-option-check"
+                                    viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                                    <polyline points="20 6 9 17 4 12"></polyline>
+                                </svg></button>
+                            <button type="button" role="option" data-server="vidlove" aria-selected="false"><span
+                                    class="server-option-dot"></span><span><strong>VidLove</strong><small>Highest
+                                        Quality (4K / 1080p HD)</small></span><svg class="server-option-check"
+                                    viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                                    <polyline points="20 6 9 17 4 12"></polyline>
+                                </svg></button>
+                            <button type="button" role="option" data-server="vixsrc" aria-selected="false"><span
+                                    class="server-option-dot"></span><span><strong>VixSrc</strong><small>Highest Quality
+                                        (1080p HD)</small></span><svg class="server-option-check" viewBox="0 0 24 24"
+                                    fill="none" stroke="currentColor" stroke-width="2.5">
+                                    <polyline points="20 6 9 17 4 12"></polyline>
+                                </svg></button>
+                        </div>
+                    </div>
+                    <button class="player-icon-btn" id="player-pip" aria-label="Picture in picture"
+                        title="Picture in picture">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <rect x="2" y="4" width="20" height="15" rx="2"></rect>
+                            <rect x="12" y="11" width="7" height="5" rx="1" fill="currentColor" stroke="none"></rect>
+                        </svg>
+                    </button>
+                    <button class="player-icon-btn" id="player-fullscreen" aria-label="Fullscreen" title="Fullscreen">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="1.9">
+                            <polyline points="8 3 3 3 3 8"></polyline>
+                            <polyline points="16 3 21 3 21 8"></polyline>
+                            <polyline points="8 21 3 21 3 16"></polyline>
+                            <polyline points="21 16 21 21 16 21"></polyline>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <div class="player-loader" id="player-loader">
+            <div class="player-spinner"></div>
+        </div>
+    </div>
+
+    <!-- Footer -->
+    <footer>
+        <div class="footer-inner">
+            <div class="footer-top">
+                <p class="footer-logo">GOFLIX</p>
+                <div class="footer-social">
+                    <a href="#" aria-label="Facebook" class="footer-social-btn">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M18 2h-3a5 5 0 0 0-5 5v3H7v4h3v8h4v-8h3l1-4h-4V7a1 1 0 0 1 1-1h3z"></path>
+                        </svg>
+                    </a>
+                    <a href="#" aria-label="Instagram" class="footer-social-btn">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2" stroke-linecap="round">
+                            <rect x="2" y="2" width="20" height="20" rx="5" ry="5"></rect>
+                            <path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z"></path>
+                            <line x1="17.5" y1="6.5" x2="17.51" y2="6.5"></line>
+                        </svg>
+                    </a>
+                    <a href="#" aria-label="Twitter / X" class="footer-social-btn">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+                            <path
+                                d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z">
+                            </path>
+                        </svg>
+                    </a>
+                    <a href="#" aria-label="YouTube" class="footer-social-btn">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+                            <path
+                                d="M22.54 6.42a2.78 2.78 0 0 0-1.95-1.96C18.88 4 12 4 12 4s-6.88 0-8.59.46a2.78 2.78 0 0 0-1.95 1.96A29 29 0 0 0 1 12a29 29 0 0 0 .46 5.58a2.78 2.78 0 0 0 1.95 1.96C5.12 20 12 20 12 20s6.88 0 8.59-.46a2.78 2.78 0 0 0 1.95-1.96A29 29 0 0 0 23 12a29 29 0 0 0-.46-5.58z">
+                            </path>
+                            <polygon points="9.75 15.02 15.5 12 9.75 8.98 9.75 15.02" fill="#000"></polygon>
+                        </svg>
+                    </a>
+                </div>
+            </div>
+            <div class="footer-links">
+                <a href="#">Audio Description</a>
+                <a href="#">Help Centre</a>
+                <a href="#">Gift Cards</a>
+                <a href="#">Media Centre</a>
+                <a href="#">Investor Relations</a>
+                <a href="#">Jobs</a>
+                <a href="#">Terms of Use</a>
+                <a href="#">Privacy</a>
+                <a href="#">Legal Notices</a>
+                <a href="#">Cookie Preferences</a>
+                <a href="#">Corporate Information</a>
+                <a href="#">Contact Us</a>
+            </div>
+            <p class="footer-copy">© <span id="footer-year">2026</span> GoFlix. Demo Project. Not affiliated with
+                Netflix.</p>
+        </div>
+    </footer>
+
+    <div id="app-toast" class="app-toast" role="status" aria-live="polite" aria-atomic="true"></div>
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@1.7.0"></script>
+    <script type="module" src="/js/main.js"></script>
+</body>
+
+</html>
