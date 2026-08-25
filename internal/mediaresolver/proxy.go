@@ -81,24 +81,23 @@ func (r *Resolver) Proxy(w http.ResponseWriter, req *http.Request, token string)
 		r.serveFromCache(w, req, s, token, u, e)
 		return nil
 	}
-	// Decouple the CDN from the slow client connection (Option 2).
-	// For media segments without a byte-range, we download the entire segment
-	// into the RAM cache first using the shared fetchForCache layer, and then
-	// serve it to the player. This prevents the CDN from timing out or dropping
-	// the connection if the player takes too long to receive the data.
-	if !strings.HasSuffix(strings.ToLower(u.Path), ".m3u8") && req.Method == http.MethodGet {
-		cf, err := r.fetchForCache(req.Context(), s, u.String(), maxCachedSegmentBytes)
-		if err == nil && cf != nil {
-			e := &cacheEntry{
-				key:         u.String(),
-				data:        cf.data,
-				status:      cf.status,
-				contentType: cf.contentType,
+	// Join in-flight downloads: if the read-ahead warmer (or another player
+	// request) is fetching this exact URL right now, waiting for it beats
+	// downloading the same bytes twice over a shared connection. Only
+	// non-manifest URLs join here — playlists are tiny and re-fetched freely.
+	if !strings.HasSuffix(strings.ToLower(u.Path), ".m3u8") && req.Method == http.MethodGet && req.Header.Get("Range") == "" {
+		if v, ok := r.inflight.Load(u.String()); ok {
+			joiner := v.(*inflightFetch)
+			select {
+			case <-joiner.done:
+				if joiner.err == nil && joiner.entry != nil {
+					r.serveFromCache(w, req, s, token, u, joiner.entry)
+					return nil
+				}
+			case <-req.Context().Done():
+				return req.Context().Err()
 			}
-			r.serveFromCache(w, req, s, token, u, e)
-			return nil
 		}
-		// Fallthrough on error to let the live fetch path handle the upstream error
 	}
 	// No Client.Timeout here: it spans the entire body read, so a slow large
 	// segment would be cancelled mid-copy and forwarded truncated (player
