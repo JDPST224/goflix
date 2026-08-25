@@ -46,6 +46,7 @@ func New(d Deps) http.Handler {
 	// the single-segment wrap playlist those renditions point at.
 	mux.HandleFunc("/api/media/subs/", d.subsRegisterHandler)
 	mux.HandleFunc("/api/subtitles/wrap.m3u8", d.subsWrapHandler)
+	mux.HandleFunc("/api/subtitles/wrap.vtt", d.subtitlesWrapVTTHandler)
 	mux.HandleFunc("/api/subtitles/vidking", d.subtitlesVidkingHandler)
 	mux.HandleFunc("/api/subtitles/vidlove", d.subtitlesVidloveHandler)
 	mux.HandleFunc("/api/subtitles/videasy/download/", d.subtitlesVideasyDownloadHandler)

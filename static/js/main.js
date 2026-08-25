@@ -1482,14 +1482,23 @@ document.addEventListener('DOMContentLoaded', () => {
             if (!data.success || !Array.isArray(data.subtitles)) return [];
             
             const combined = [];
-            const seen = new Set();
-            for (const sub of data.subtitles) {
-                if (!sub || !sub.url) continue;
-                const key = `${(sub.language || '').toLowerCase().trim()}__${(sub.label || '').toLowerCase().trim()}`;
-                if (!seen.has(key)) {
-                    seen.add(key);
-                    combined.push(sub);
-                }
+            const seenLabels = new Map();
+            const seenUrls = new Set();
+            for (const entry of data.subtitles) {
+                // An identical URL is the identical file — drop only that.
+                if (!entry || !entry.url || seenUrls.has(entry.url)) continue;
+                seenUrls.add(entry.url);
+                // Parallel uploads sharing a language/label are kept as
+                // numbered versions ("English", "English (2)") instead of
+                // collapsed: they usually come from different releases and
+                // sync differently against our stream.
+                const key = `${(entry.language || '').toLowerCase().trim()}__${(entry.label || '').toLowerCase().trim()}`;
+                const n = seenLabels.get(key) || 0;
+                seenLabels.set(key, n + 1);
+                const sub = n > 0
+                    ? { ...entry, label: `${entry.label || entry.language || 'Subtitle'} (${n + 1})` }
+                    : entry;
+                combined.push(sub);
             }
             return combined;
         } catch (e) {

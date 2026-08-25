@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -135,14 +136,21 @@ func (d Deps) subsWrapHandler(w http.ResponseWriter, r *http.Request) {
 	// players demonstrably accept (single segment, ALLOW-CACHE, no
 	// PLAYLIST-TYPE). The segment URI stays root-relative and resolves
 	// against the wrap playlist's own origin — the same trick the provider
-	// manifests use.
+	// manifests use — and points at the wrap.vtt endpoint rather than a raw
+	// download path, so the served WebVTT carries the X-TIMESTAMP-MAP header
+	// native HLS players need to sync cues against the TS timeline. A pts on
+	// this request is forwarded so the mapping stays tunable end to end.
+	segment := "/api/subtitles/wrap.vtt?src=" + url.QueryEscape(src)
+	if pts := strings.TrimSpace(r.URL.Query().Get("pts")); pts != "" {
+		segment += "&pts=" + url.QueryEscape(pts)
+	}
 	body := "#EXTM3U\n" +
 		"#EXT-X-VERSION:3\n" +
 		"#EXT-X-MEDIA-SEQUENCE:0\n" +
 		"#EXT-X-ALLOW-CACHE:YES\n" +
 		"#EXT-X-TARGETDURATION:7200\n" +
 		"#EXTINF:7200.000,\n" +
-		src + "\n" +
+		segment + "\n" +
 		"#EXT-X-ENDLIST\n"
 	w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
 	w.Header().Set("Cache-Control", "max-age=3600")
@@ -151,21 +159,27 @@ func (d Deps) subsWrapHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // renditionsFromSubtitles maps provider search results to manifest-ready
-// renditions, deduplicating by language+label the way the frontend does.
+// renditions. Parallel uploads sharing a language+label are kept as numbered
+// versions ("English", "English (2)") rather than collapsed: they usually come
+// from different releases and sync differently against our stream. Only an
+// identical URL is a true duplicate and gets dropped.
 func renditionsFromSubtitles(subs []subtitles.FrontendSubtitle) []mediaresolver.SubRendition {
 	out := make([]mediaresolver.SubRendition, 0, len(subs))
-	seen := make(map[string]bool, len(subs))
+	seenLabel := make(map[string]int, len(subs))
+	seenURL := make(map[string]bool, len(subs))
 	for _, s := range subs {
 		src := strings.TrimSpace(s.URL)
-		if !validLocalSubtitlePath(src) {
+		if !validLocalSubtitlePath(src) || seenURL[src] {
 			continue
 		}
+		seenURL[src] = true
 		key := strings.ToLower(s.Language) + "__" + strings.ToLower(s.Label)
-		if seen[key] {
-			continue
-		}
-		seen[key] = true
 		label := SanitizeLabel(s.Label)
+		n := seenLabel[key]
+		if n > 0 {
+			label = fmt.Sprintf("%s (%d)", label, n+1)
+		}
+		seenLabel[key] = n + 1
 		out = append(out, mediaresolver.SubRendition{
 			Label:    label,
 			Language: mediaresolver.SanitizeManifestAttr(s.Language),
@@ -203,19 +217,21 @@ func FetchSubRenditions(ctx context.Context, client *catalog.Client, req mediare
 		return nil
 	}
 
-	subs := subtitles.FetchVideasySubtitles(ctx, id, "", "")
+	// Every TV lookup stays episode-scoped end to end: accepting a show-level
+	// result first can serve another episode's file, which is worse than no
+	// subtitles at all. Movies have no season/episode to scope by.
+	querySeason, queryEpisode := "", ""
+	if req.Type == mediaresolver.TV {
+		querySeason, queryEpisode = req.Season, req.Episode
+	}
+
+	subs := subtitles.FetchVideasySubtitles(ctx, id, querySeason, queryEpisode)
 	if len(subs) == 0 && req.Provider == "vidlove" {
 		subs = subtitles.FetchVidloveSubtitles(ctx, mediaType, id, req.Season, req.Episode)
 	}
-	if len(subs) == 0 && req.Type == mediaresolver.TV {
-		subs = subtitles.FetchVideasySubtitles(ctx, id, req.Season, req.Episode)
-	}
 	if len(subs) == 0 && client.HasCredentials() {
 		if imdbID, err := client.ExternalID(mediaType, id, req.Season, req.Episode); err == nil && imdbID != "" {
-			subs = subtitles.FetchVideasySubtitles(ctx, imdbID, "", "")
-			if len(subs) == 0 && req.Type == mediaresolver.TV {
-				subs = subtitles.FetchVideasySubtitles(ctx, imdbID, req.Season, req.Episode)
-			}
+			subs = subtitles.FetchVideasySubtitles(ctx, imdbID, querySeason, queryEpisode)
 		}
 	}
 	if len(subs) == 0 {
