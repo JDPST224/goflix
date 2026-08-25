@@ -13,7 +13,6 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -163,14 +162,19 @@ func (r *Resolver) Proxy(w http.ResponseWriter, req *http.Request, token string)
 		return err
 	}
 	defer resp.Body.Close()
-	// Player-priority accounting: from here until the upstream response has
-	// been fully read into memory, this request is consuming live upstream
-	// bandwidth. The read-ahead pump sees the counter and pauses new prefetch
-	// work. We manually manage the counter in the goroutines below so it
-	// decrements as soon as the CDN download finishes, rather than waiting for
-	// the client to finish reading.
+	// Player-priority accounting: from here until the response has been fully
+	// forwarded, this request is consuming live upstream bandwidth. The
+	// read-ahead pump sees the counter and pauses new prefetch work.
 	s.liveFetches.Add(1)
-
+	defer func() {
+		// When the last live fetch drains, re-kick the read-ahead pump so any
+		// window work the player-priority gate was holding resumes immediately.
+		// Without this the lookahead can sit idle until the next player request
+		// happens to arrive.
+		if s.liveFetches.Add(-1) == 0 {
+			r.pumpPrefetch(s)
+		}
+	}()
 	if cookies := resp.Cookies(); len(cookies) > 0 {
 		r.mu.Lock()
 		if current := r.sessions[token]; current != nil {
@@ -209,39 +213,23 @@ func (r *Resolver) Proxy(w http.ResponseWriter, req *http.Request, token string)
 		r.noteSegmentServed(s, u.String())
 		w.WriteHeader(resp.StatusCode)
 		if req.Method != http.MethodHead {
-			// Stream-through caching: buffer the entire download in a goroutine
-			// as fast as possible to prevent a slow client connection from
-			// throttling the upstream CDN (which can cause the CDN to drop the
-			// connection) and to release the liveFetches gate quickly so
-			// prefetching can resume.
-			streamer := newAsyncStreamer(maxCachedSegmentBytes)
-			mirror := &boundedMirror{dst: streamer, cap: maxCachedSegmentBytes}
-
-			go func() {
-				defer s.liveFetches.Add(-1)
-				defer func() {
-					if s.liveFetches.Load() == 0 {
-						r.pumpPrefetch(s)
-					}
-				}()
-				bufp := copyBufPool.Get().(*[]byte)
-				nw, copyErr := io.CopyBuffer(mirror, bodyReader, *bufp)
-				copyBufPool.Put(bufp)
-				streamer.CloseWithError(copyErr)
-
-				if copyErr == nil && nw > 0 && nw == int64(len(mirror.buf)) {
-					r.cache.put(&cacheEntry{
-						key:         u.String(),
-						data:        mirror.buf,
-						status:      http.StatusOK,
-						contentType: resp.Header.Get("Content-Type"),
-						expiresAt:   time.Now().Add(cacheEntryTTL),
-					})
-				}
-			}()
-
-			// Serve to the player at its own speed.
-			_, _ = io.Copy(w, streamer)
+			// Stream-through caching: forward to the player while mirroring
+			// a private copy, capped at the per-entry cache limit so an
+			// oversized body streams through without inflating memory. A
+			// clean full-body pass-through is admitted into the LRU.
+			mirror := &boundedMirror{dst: w, cap: maxCachedSegmentBytes}
+			bufp := copyBufPool.Get().(*[]byte)
+			nw, copyErr := io.CopyBuffer(mirror, bodyReader, *bufp)
+			copyBufPool.Put(bufp)
+			if copyErr == nil && nw > 0 && nw == int64(len(mirror.buf)) {
+				r.cache.put(&cacheEntry{
+					key:         u.String(),
+					data:        mirror.buf,
+					status:      http.StatusOK,
+					contentType: resp.Header.Get("Content-Type"),
+					expiresAt:   time.Now().Add(cacheEntryTTL),
+				})
+			}
 		}
 		return nil
 	}
@@ -308,76 +296,6 @@ func (r *Resolver) Proxy(w http.ResponseWriter, req *http.Request, token string)
 		_, _ = io.WriteString(w, rewritten)
 	}
 	return nil
-}
-
-// asyncStreamer is an io.ReadWriter that buffers written data without blocking
-// the writer up to a capacity limit, allowing an upstream to drain at full
-// speed while a slow downstream client reads at its own pace.
-type asyncStreamer struct {
-	mu     sync.Mutex
-	cond   *sync.Cond
-	chunks [][]byte
-	err    error
-	eof    bool
-	total  int
-	cap    int
-}
-
-func newAsyncStreamer(cap int) *asyncStreamer {
-	s := &asyncStreamer{cap: cap}
-	s.cond = sync.NewCond(&s.mu)
-	return s
-}
-
-func (s *asyncStreamer) Write(p []byte) (int, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for s.total+len(p) > s.cap && !s.eof && s.err == nil {
-		s.cond.Wait()
-	}
-	if s.err != nil || s.eof {
-		return 0, errors.New("closed")
-	}
-	b := make([]byte, len(p))
-	copy(b, p)
-	s.chunks = append(s.chunks, b)
-	s.total += len(b)
-	s.cond.Broadcast()
-	return len(p), nil
-}
-
-func (s *asyncStreamer) Read(p []byte) (int, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for len(s.chunks) == 0 && !s.eof && s.err == nil {
-		s.cond.Wait()
-	}
-	if len(s.chunks) > 0 {
-		n := copy(p, s.chunks[0])
-		if n == len(s.chunks[0]) {
-			s.chunks = s.chunks[1:]
-		} else {
-			s.chunks[0] = s.chunks[0][n:]
-		}
-		s.total -= n
-		s.cond.Broadcast()
-		return n, nil
-	}
-	if s.err != nil {
-		return 0, s.err
-	}
-	return 0, io.EOF
-}
-
-func (s *asyncStreamer) CloseWithError(err error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if err != nil {
-		s.err = err
-	} else {
-		s.eof = true
-	}
-	s.cond.Broadcast()
 }
 
 // boundedMirror forwards every write to dst while mirroring into an internal
