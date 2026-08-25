@@ -115,14 +115,6 @@ func (r *Resolver) pumpPrefetch(s *proxySession) {
 	if w == nil {
 		return
 	}
-	// Player-priority gate: while a player-facing fetch is downloading
-	// uncached data upstream, hold new read-ahead work — every byte spent on
-	// prefetch during a live fetch competes with actual playback. The pump
-	// re-runs when in-flight work completes, so held work resumes as soon as
-	// the player's own fetch drains.
-	if s.liveFetches.Load() > 0 {
-		return
-	}
 	w.mu.Lock()
 	if len(w.segments) == 0 {
 		w.mu.Unlock()
