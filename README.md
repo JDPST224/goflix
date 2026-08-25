@@ -116,6 +116,26 @@ static/js/                  vanilla ES modules: main.js (orchestrator),
   read-ahead keeps more of the stream hot in RAM.
 - **Port already in use** — the listen address is hard-coded to `:8080`.
 
+## Bandwidth Testing
+
+GoFlix includes a standalone bandwidth tester to evaluate its upstream media servers. You can run it with the standard Go test tool:
+
+```bash
+go test -v -run TestBandwidth ./internal/mediaresolver -timeout 20m
+```
+
+Optional environment variables for customizing the test:
+- `BW_PROVIDERS` — test a comma-separated subset (e.g., `vixsrc,vidking,vidlove`)
+- `BW_TYPE` — test a specific media type (`movie` or `tv`)
+- `BW_ID` — test a specific TMDB ID (default is 27205 for Inception)
+- `BW_SEASON` and `BW_EPISODE` — test specific TV show episodes
+
+Example testing a specific TV show episode on a subset of providers:
+
+```bash
+BW_PROVIDERS=vidking,vidlove BW_TYPE=tv BW_ID=1399 BW_SEASON=1 BW_EPISODE=1 go test -v -run TestBandwidth ./internal/mediaresolver -timeout 20m
+```
+
 ## Notes
 
 - The frontend has no build step: edit the ES modules under `static/js/`
