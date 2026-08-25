@@ -1,6 +1,8 @@
 package server
 
 import (
+	"context"
+	"errors"
 	"log"
 	"net/http"
 	"strings"
@@ -92,6 +94,12 @@ func (d Deps) mediaProxyHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := d.Resolver.Proxy(w, r, token); err != nil {
+		// A player aborting a request (seek, quality switch, tab close) cancels
+		// its request context — normal churn, not a failure worth logging.
+		// writeError would only target an already-dead connection.
+		if errors.Is(err, context.Canceled) || r.Context().Err() != nil {
+			return
+		}
 		log.Printf("[MediaResolver] proxy failed: %v", err)
 		writeError(w, http.StatusBadGateway, "Unable to proxy media source")
 	}

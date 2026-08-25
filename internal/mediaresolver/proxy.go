@@ -88,6 +88,8 @@ func (r *Resolver) Proxy(w http.ResponseWriter, req *http.Request, token string)
 	if !strings.HasSuffix(strings.ToLower(u.Path), ".m3u8") && req.Method == http.MethodGet && req.Header.Get("Range") == "" {
 		if v, ok := r.inflight.Load(u.String()); ok {
 			joiner := v.(*inflightFetch)
+			timer := time.NewTimer(inflightJoinWait)
+			defer timer.Stop()
 			select {
 			case <-joiner.done:
 				if joiner.err == nil && joiner.entry != nil {
@@ -96,6 +98,10 @@ func (r *Resolver) Proxy(w http.ResponseWriter, req *http.Request, token string)
 				}
 			case <-req.Context().Done():
 				return req.Context().Err()
+			case <-timer.C:
+				// The shared download is stalled (upstream accepted the
+				// stream but never answered). Stop waiting and fall through
+				// to an independent fetch instead of inheriting the stall.
 			}
 		}
 	}

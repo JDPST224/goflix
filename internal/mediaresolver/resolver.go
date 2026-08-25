@@ -119,6 +119,11 @@ const (
 	// prefetchLiveMaxInflight caps read-ahead parallelism while a player
 	// fetch is active — the reduced player-priority mode in pumpPrefetch.
 	prefetchLiveMaxInflight = 2
+	// inflightJoinWait bounds how long a player request waits on an already
+	// running download of the same segment before fetching independently.
+	// A read-ahead stuck on a stalled upstream stream must not hold live
+	// playback hostage for its entire timeout window.
+	inflightJoinWait = 4 * time.Second
 )
 
 type Resolver struct {
@@ -194,7 +199,13 @@ func New(cfg Config) (*Resolver, error) {
 			IdleConnTimeout:       120 * time.Second,
 			TLSHandshakeTimeout:   10 * time.Second,
 			ExpectContinueTimeout: 1 * time.Second,
-			ResponseHeaderTimeout: 30 * time.Second,
+			// Some provider CDNs accept an HTTP/2 stream and then never answer
+			// it while the connection itself stays ping-healthy (per-stream
+			// throttle), so the health check below cannot catch it. A short
+			// header window fails over to doWithRetry's next attempt quickly
+			// instead of blocking a prefetch slot — and any player request
+			// joined onto that download — for the full wait.
+			ResponseHeaderTimeout: 10 * time.Second,
 			ForceAttemptHTTP2:     true,
 			// Health-check HTTP/2 connections that go quiet with PING frames
 			// and close them when the peer stops answering. Without this, one
