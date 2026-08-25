@@ -162,17 +162,20 @@ func (r *Resolver) Proxy(w http.ResponseWriter, req *http.Request, token string)
 		return err
 	}
 	defer resp.Body.Close()
-	// Player-priority accounting: from here until the response has been fully
-	// forwarded, this request is consuming live upstream bandwidth. The
+	// Player-priority accounting: from here until the upstream response body is fully
+	// buffered into memory, this request is consuming live upstream bandwidth. The
 	// read-ahead pump sees the counter and pauses new prefetch work.
 	s.liveFetches.Add(1)
+	liveFetchActive := true
 	defer func() {
 		// When the last live fetch drains, re-kick the read-ahead pump so any
 		// window work the player-priority gate was holding resumes immediately.
 		// Without this the lookahead can sit idle until the next player request
 		// happens to arrive.
-		if s.liveFetches.Add(-1) == 0 {
-			r.pumpPrefetch(s)
+		if liveFetchActive {
+			if s.liveFetches.Add(-1) == 0 {
+				r.pumpPrefetch(s)
+			}
 		}
 	}()
 	if cookies := resp.Cookies(); len(cookies) > 0 {
@@ -213,23 +216,31 @@ func (r *Resolver) Proxy(w http.ResponseWriter, req *http.Request, token string)
 		r.noteSegmentServed(s, u.String())
 		w.WriteHeader(resp.StatusCode)
 		if req.Method != http.MethodHead {
-			// Stream-through caching: forward to the player while mirroring
-			// a private copy, capped at the per-entry cache limit so an
-			// oversized body streams through without inflating memory. A
-			// clean full-body pass-through is admitted into the LRU.
-			mirror := &boundedMirror{dst: w, cap: maxCachedSegmentBytes}
-			bufp := copyBufPool.Get().(*[]byte)
-			nw, copyErr := io.CopyBuffer(mirror, bodyReader, *bufp)
-			copyBufPool.Put(bufp)
-			if copyErr == nil && nw > 0 && nw == int64(len(mirror.buf)) {
+			// Decouple: fully download the segment into RAM first to free up the upstream connection
+			// and unblock the read-ahead warmer.
+			data, copyErr := io.ReadAll(io.LimitReader(bodyReader, maxCachedSegmentBytes+1))
+			
+			// Upstream download complete. Release the liveFetch gate so the prefetcher
+			// can start buffering the NEXT segments concurrently while we slowly write
+			// this one to the downstream player.
+			if liveFetchActive {
+				liveFetchActive = false
+				if s.liveFetches.Add(-1) == 0 {
+					r.pumpPrefetch(s)
+				}
+			}
+
+			if copyErr == nil && int64(len(data)) <= maxCachedSegmentBytes {
 				r.cache.put(&cacheEntry{
 					key:         u.String(),
-					data:        mirror.buf,
+					data:        data,
 					status:      http.StatusOK,
 					contentType: resp.Header.Get("Content-Type"),
 					expiresAt:   time.Now().Add(cacheEntryTTL),
 				})
 			}
+
+			_, _ = w.Write(data)
 		}
 		return nil
 	}
@@ -243,6 +254,12 @@ func (r *Resolver) Proxy(w http.ResponseWriter, req *http.Request, token string)
 		reader = gz
 	}
 	data, err := io.ReadAll(io.LimitReader(reader, maxManifestBytes+1))
+	if liveFetchActive {
+		liveFetchActive = false
+		if s.liveFetches.Add(-1) == 0 {
+			r.pumpPrefetch(s)
+		}
+	}
 	if err != nil {
 		return err
 	}

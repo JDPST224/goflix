@@ -136,6 +136,8 @@ Example testing a specific TV show episode on a subset of providers:
 BW_PROVIDERS=vidking,vidlove BW_TYPE=tv BW_ID=1399 BW_SEASON=1 BW_EPISODE=1 go test -v -run TestBandwidth ./internal/mediaresolver -timeout 20m
 ```
 
+> **Note:** Go caches successful test results. If your test finishes instantly with `(cached)`, add the `-count=1` flag to force a fresh run (e.g., `go test -count=1 -v ...`), or run `go clean -testcache` to clear the cache globally.
+
 ## Notes
 
 - The frontend has no build step: edit the ES modules under `static/js/`
