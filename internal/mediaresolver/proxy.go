@@ -86,7 +86,7 @@ func (r *Resolver) Proxy(w http.ResponseWriter, req *http.Request, token string)
 	// into the RAM cache first using the shared fetchForCache layer, and then
 	// serve it to the player. This prevents the CDN from timing out or dropping
 	// the connection if the player takes too long to receive the data.
-	if !strings.HasSuffix(strings.ToLower(u.Path), ".m3u8") && req.Method == http.MethodGet && req.Header.Get("Range") == "" {
+	if !strings.HasSuffix(strings.ToLower(u.Path), ".m3u8") && req.Method == http.MethodGet {
 		cf, err := r.fetchForCache(req.Context(), s, u.String(), maxCachedSegmentBytes)
 		if err == nil && cf != nil {
 			e := &cacheEntry{
