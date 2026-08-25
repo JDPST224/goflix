@@ -2878,12 +2878,22 @@ document.addEventListener('DOMContentLoaded', () => {
         if (playerControlsBottom) playerControlsBottom.classList.remove('hidden');
         playerModal.style.cursor = 'default';
         clearTimeout(controlsHideTimer);
-        controlsHideTimer = setTimeout(() => {
-            playerControlsTop.classList.add('hidden');
-            if (playerControlsBottom) playerControlsBottom.classList.add('hidden');
-            playerModal.classList.remove('player-controls-visible');
-            playerModal.style.cursor = 'none';
-        }, 3000);
+        controlsHideTimer = setTimeout(hideControlsIdle, 3000);
+    }
+
+    // Auto-hides both bars after the idle delay — but only once playback is
+    // actually running. While the loader covers the video (resolving source,
+    // buffering mid-stream, or an error card), the hide keeps postponing so
+    // Back / server switching stay reachable without moving the mouse.
+    function hideControlsIdle() {
+        if (!playerLoader || playerLoader.style.display !== 'none') {
+            controlsHideTimer = setTimeout(hideControlsIdle, 3000);
+            return;
+        }
+        playerControlsTop.classList.add('hidden');
+        if (playerControlsBottom) playerControlsBottom.classList.add('hidden');
+        playerModal.classList.remove('player-controls-visible');
+        playerModal.style.cursor = 'none';
     }
 
     function updatePlayerPlayIcon() {
@@ -3241,7 +3251,13 @@ document.addEventListener('DOMContentLoaded', () => {
         if (e.target.closest('.player-ep-panel')) return;
         showControls();
     });
-    playerModal.addEventListener('mouseleave', () => { clearTimeout(controlsHideTimer); playerControlsTop.classList.add('hidden'); if (playerControlsBottom) playerControlsBottom.classList.add('hidden'); });
+    playerModal.addEventListener('mouseleave', () => {
+        // Same rule as hideControlsIdle: bars only auto-hide once playback
+        // is actually running, never while loading/buffering or on error.
+        if (!playerLoader || playerLoader.style.display !== 'none') return;
+        clearTimeout(controlsHideTimer);
+        controlsHideTimer = setTimeout(hideControlsIdle, 3000);
+    });
     closePlayer.addEventListener('click', closePlayerModal);
 
     // ─── Keyboard shortcuts ───────────────────────────────────────────────────

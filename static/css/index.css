@@ -1731,10 +1731,15 @@ body {
     pointer-events: none !important;
 }
 
-.player-modal > .player-controls-top,
-.player-modal > .player-controls-bottom,
 .player-modal > .player-center-play,
 .player-modal > .player-ep-panel { z-index: 30; }
+
+/* The fullscreen loader (z-40, opaque black) must never cover the bars:
+   while the source resolves or an error card is up, Back / server switching
+   stay visible and clickable above it. Idle auto-hide still applies once
+   playback runs — see hideControlsIdle() in main.js. */
+.player-modal > .player-controls-top,
+.player-modal > .player-controls-bottom { z-index: 50; }
 
 /* ── Top bar ────────────────────────────────────────────────── */
 
