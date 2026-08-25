@@ -114,6 +114,18 @@ static/js/                  vanilla ES modules: main.js (orchestrator),
   `BROWSER_EXECUTABLE` at it.
 - **Playback stalls on slow connections** — raise `CACHE_MAX_MB` so the
   read-ahead keeps more of the stream hot in RAM.
+- **Playback buffers when the server runs on a VPS** — long or lossy routes
+  between the server and viewers benefit from BBR congestion control. Enable
+  it once on the VPS:
+
+  ```bash
+  echo "net.core.default_qdisc=fq" | sudo tee -a /etc/sysctl.conf
+  echo "net.ipv4.tcp_congestion_control=bbr" | sudo tee -a /etc/sysctl.conf
+  sudo sysctl -p
+  ```
+
+  Verify with `sysctl net.ipv4.tcp_congestion_control` — it should print
+  `bbr`.
 - **Port already in use** — the listen address is hard-coded to `:8080`.
 
 ## Bandwidth Testing
