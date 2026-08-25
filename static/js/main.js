@@ -2328,23 +2328,35 @@ document.addEventListener('DOMContentLoaded', () => {
             vixPlayer.addEventListener('playing', onPlaying);
 
             if (window.Hls && Hls.isSupported()) {
+                // Aggressive ABR is only safe when playback is served by this
+                // machine or the LAN: there the proxy pre-buffers into RAM and
+                // every hop is short, so measured throughput runs hot and the
+                // top tier is always sustainable. Over a public address each
+                // fragment crosses a WAN where loss bursts stall individual
+                // fetches mid-transfer — there hls.js's conservative profile
+                // applies instead: ABR starts from its own bandwidth estimate
+                // and climbs as measurements allow, rather than locking the
+                // top tier and rebufferring while a shallow buffer outgrows
+                // the stalls.
+                const host = location.hostname.toLowerCase();
+                const localPlayback = host === 'localhost' || host === '::1' ||
+                    /^127\./.test(host) || /^10\./.test(host) ||
+                    /^192\.168\./.test(host) || /^172\.(1[6-9]|2\d|3[01])\./.test(host);
                 vixHlsInstance = new Hls({
                     enableWorker: true,
                     lowLatencyMode: false,
                     capLevelToPlayerSize: false,
                     renderTextTracksNatively: true,
                     autoStartLoad: true,
-                    startLevel: 999,
-                    // ABR bias toward the top tier: the server pre-buffers into
-                    // RAM and serves over loopback, so measured throughput runs
-                    // hot — require less headroom before claiming a higher
-                    // variant (defaults: 0.95 down-guard / 0.7 up-switch) and
-                    // assume a healthier starting estimate. Playback still
-                    // steps down when real throughput genuinely can't keep up;
-                    // all variants stay in the manifest so there is headroom.
-                    abrEwmaDefaultEstimate: 2000000,
-                    abrBandWidthFactor: 1.0,
-                    abrBandWidthUpFactor: 0.9,
+                    startLevel: localPlayback ? 999 : -1,
+                    // Local profile biases toward the top tier: require less
+                    // headroom before claiming a higher variant (hls.js
+                    // defaults: 0.95 down-guard / 0.7 up-switch) and assume a
+                    // healthier starting estimate. All variants stay in the
+                    // manifest either way, so ABR always has headroom.
+                    abrEwmaDefaultEstimate: localPlayback ? 2000000 : 1000000,
+                    abrBandWidthFactor: localPlayback ? 1.0 : 0.95,
+                    abrBandWidthUpFactor: localPlayback ? 0.9 : 0.7,
                     // Buffer optimization for buffer-free 4K UHD & 1080p playback.
                     // 120s forward buffer rides out upstream dips; RAM use is
                     // bounded by maxBufferSize below.
@@ -2369,8 +2381,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 vixHlsInstance.on(Hls.Events.MANIFEST_PARSED, function(event, data) {
                     if (requestId !== playerRequestId) return;
-                    // Automatically lock playback to the highest available quality (4K 2160p, 1080p, or max bitrate).
-                    if (data.levels && data.levels.length > 0) {
+                    // Local playback: start on the highest available quality
+                    // (4K 2160p, 1080p, or max bitrate). Remote playback leaves
+                    // startLevel at -1 so ABR picks from its own estimate.
+                    if (localPlayback && data.levels && data.levels.length > 0) {
                         let highestLevelIndex = 0;
                         let maxScore = -1;
                         for (let i = 0; i < data.levels.length; i++) {

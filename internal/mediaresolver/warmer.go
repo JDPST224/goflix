@@ -115,14 +115,6 @@ func (r *Resolver) pumpPrefetch(s *proxySession) {
 	if w == nil {
 		return
 	}
-	// Player-priority gate: while a player-facing fetch is downloading
-	// uncached data upstream, hold new read-ahead work — every byte spent on
-	// prefetch during a live fetch competes with actual playback. The pump
-	// re-runs when in-flight work completes, so held work resumes as soon as
-	// the player's own fetch drains.
-	if s.liveFetches.Load() > 0 {
-		return
-	}
 	w.mu.Lock()
 	if len(w.segments) == 0 {
 		w.mu.Unlock()
@@ -132,9 +124,21 @@ func (r *Resolver) pumpPrefetch(s *proxySession) {
 	if windowEnd > len(w.segments) {
 		windowEnd = len(w.segments)
 	}
+	// Player-priority throttle: while a player-facing fetch is downloading
+	// uncached data upstream, read-ahead keeps running at reduced parallelism
+	// rather than stopping outright. A full stop let the player outrun the
+	// window — once it did, every segment arrived through a fresh live fetch,
+	// and each of those exposes playback to a complete upstream round trip,
+	// which WAN loss turns into visible stalls. Two prefetch downloads barely
+	// dent upstream capacity (these CDNs cap per connection anyway) while
+	// keeping the cache ahead of the player; full parallelism resumes when the
+	// last live fetch drains (the proxy re-kicks this pump at that moment).
 	maxInflight := prefetchMaxInflight
 	if w.served == 0 {
 		maxInflight = prefetchInitialInflight
+	}
+	if s.liveFetches.Load() > 0 && maxInflight > prefetchLiveMaxInflight {
+		maxInflight = prefetchLiveMaxInflight
 	}
 	now := time.Now()
 	inflightCount := 0

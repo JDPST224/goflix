@@ -105,17 +105,20 @@ const (
 	// bandwidth: probes showed a single sequential connection sustaining
 	// 1.7-23 Mbps depending on provider while 4-6 parallel connections
 	// aggregated 51-800+ Mbps. Steady state therefore keeps five read-ahead
-	// downloads running alongside the player's own live fetch, and the
+	// downloads running alongside the player's local fetches, and the
 	// initial burst runs eight to fill the first window fast. The
-	// liveFetches gate keeps the player prioritized: it only defers NEW
-	// prefetch scheduling while a player-facing fetch is active (already-
-	// launched downloads continue), and the pump re-kicks the moment the
+	// liveFetches knob keeps the player prioritized: while a player-facing
+	// fetch is active, read-ahead drops to prefetchLiveMaxInflight parallel
+	// downloads instead of five, and full parallelism resumes the moment the
 	// last live fetch drains.
 	prefetchMaxInflight     = 5
 	prefetchInitialInflight = 8
 	// prefetchFailureBackoff waits before re-attempting a segment that failed,
 	// so one bad segment cannot spin the prefetcher into a retry storm.
 	prefetchFailureBackoff = 30 * time.Second
+	// prefetchLiveMaxInflight caps read-ahead parallelism while a player
+	// fetch is active — the reduced player-priority mode in pumpPrefetch.
+	prefetchLiveMaxInflight = 2
 )
 
 type Resolver struct {
