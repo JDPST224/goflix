@@ -135,6 +135,9 @@ func (c *Client) SearchMulti(encodedQuery string) []Movie {
 	if err != nil {
 		return nil
 	}
+	if res.StatusCode != http.StatusOK {
+		return nil
+	}
 	var raw TMDBResponse
 	if err := json.Unmarshal(body, &raw); err != nil {
 		return nil

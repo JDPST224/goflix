@@ -53,7 +53,9 @@ func jsonGate(w http.ResponseWriter, r *http.Request) bool {
 func corsGate(w http.ResponseWriter, r *http.Request, allowMethods string, exposeHeaders bool) bool {
 	h := w.Header()
 	h.Set("Access-Control-Allow-Origin", "*")
-	h.Set("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS")
+	// Use the caller-supplied allowMethods in the CORS header so browser
+	// preflights for POST (subtitle registration) are not rejected.
+	h.Set("Access-Control-Allow-Methods", allowMethods+", OPTIONS")
 	h.Set("Access-Control-Allow-Headers", "*")
 	if exposeHeaders {
 		h.Set("Access-Control-Expose-Headers", "Content-Length, Content-Range, Accept-Ranges")

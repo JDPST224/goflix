@@ -35,6 +35,11 @@ func main() {
 		return server.FetchSubRenditions(ctx, client, req)
 	}
 
+	// Graceful shutdown context: cancelled by SIGTERM or SIGINT. Created here
+	// so it can also bound the catalog refresh loop goroutine lifetime.
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
+	defer stop()
+
 	if !client.HasCredentials() {
 		log.Println("WARNING: No TMDB credentials in config.conf")
 		log.Println("Set TMDB_ACCESS_TOKEN (Bearer token) or TMDB_API_KEY")
@@ -46,7 +51,8 @@ func main() {
 		}
 
 		// Initial fetch of all caches, then auto-refresh every 30 minutes.
-		store.StartRefreshLoop()
+		// ctx is cancelled by SIGTERM/SIGINT, which stops the ticker goroutine.
+		store.StartRefreshLoop(ctx)
 	}
 
 	handler := server.New(server.Deps{
@@ -65,10 +71,8 @@ func main() {
 		IdleTimeout:       90 * time.Second,
 	}
 
-	// Graceful shutdown: wait for SIGTERM or SIGINT, then cleanly drain active
+	// Graceful shutdown: wait for signal then cleanly drain active
 	// connections and release browser sessions before exiting.
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
-	defer stop()
 
 	go func() {
 		log.Println("Server listening on :8080 — open http://localhost:8080")

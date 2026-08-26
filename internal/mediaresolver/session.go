@@ -44,6 +44,10 @@ type proxySession struct {
 	// done) so the first manifest fetch can wait briefly for the provider
 	// ladder instead of serving a manifest without renditions.
 	subsState atomic.Int32
+	// subsDone is closed by SetSubRenditions when the subtitle ladder
+	// completes (successfully or not). waitForSubs selects on it to avoid
+	// busy-polling with time.Sleep.
+	subsDone chan struct{}
 }
 
 // inflightFetch is one shared upstream download in progress. Joiners close
@@ -82,7 +86,13 @@ func (r *Resolver) newSession(source string, headers http.Header, allowed map[st
 	if headers.Get("User-Agent") == "" {
 		headers.Set("User-Agent", defaultUserAgent)
 	}
-	r.sessions[token] = &proxySession{source: source, headers: cloneHeader(headers), allowed: allowed, expiresAt: now.Add(r.sessionTTL())}
+	r.sessions[token] = &proxySession{
+		source:    source,
+		headers:   cloneHeader(headers),
+		allowed:   allowed,
+		expiresAt: now.Add(r.sessionTTL()),
+		subsDone:  make(chan struct{}),
+	}
 	// CancelFunc is non-blocking, so firing these while holding r.mu cannot
 	// deadlock — it only closes the read-ahead pipelines' done channels.
 	for _, c := range cancels {

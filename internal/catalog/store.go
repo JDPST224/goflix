@@ -4,6 +4,7 @@
 package catalog
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"sort"
@@ -404,8 +405,10 @@ func InterleaveMovies(a, b []Movie) []Movie {
 }
 
 // StartRefreshLoop performs the initial parallel fetch and then refreshes all
-// three caches every 30 minutes. Call only when credentials are configured.
-func (s *Store) StartRefreshLoop() {
+// three caches every 30 minutes. ctx controls the goroutine lifetime: cancel
+// it (or let SIGTERM close it) to stop the background loop cleanly.
+// Call only when credentials are configured.
+func (s *Store) StartRefreshLoop(ctx context.Context) {
 	done := make(chan struct{}, 4)
 	go func() { s.RefreshMovies(); done <- struct{}{} }()
 	go func() { s.RefreshTVShows(); done <- struct{}{} }()
@@ -419,11 +422,16 @@ func (s *Store) StartRefreshLoop() {
 	ticker := time.NewTicker(30 * time.Minute)
 	go func() {
 		defer ticker.Stop()
-		for range ticker.C {
-			go s.RefreshMovies()
-			go s.RefreshTVShows()
-			go s.RefreshPopular()
-			go s.RefreshProviders()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				go s.RefreshMovies()
+				go s.RefreshTVShows()
+				go s.RefreshPopular()
+				go s.RefreshProviders()
+			}
 		}
 	}()
 }

@@ -73,6 +73,15 @@ func (r *Resolver) SetSubRenditions(token string, subs []SubRendition) error {
 	}
 	s.subs = subs
 	s.subsState.Store(subsDone)
+	// Signal any waitForSubs caller so it returns immediately instead of
+	// sleeping out the remaining polling window.
+	if s.subsDone != nil {
+		select {
+		case <-s.subsDone: // already closed — no-op
+		default:
+			close(s.subsDone)
+		}
+	}
 	return nil
 }
 
@@ -128,14 +137,32 @@ func (r *Resolver) attachAndWarm(token string, req MediaRequest) {
 }
 
 // waitForSubs blocks while a backend attachment is still in flight so the
-// very first manifest fetch already carries the renditions. Bounded: a slow
-// ladder delays the manifest by at most waitForSubsInterval*waitForSubsTicks.
+// very first manifest fetch already carries the renditions. It returns as
+// soon as the subtitle ladder completes, or when the context is cancelled
+// (player disconnect / request abort), or after the 2.5s ceiling —
+// whichever comes first. This replaces the original time.Sleep busy-poll
+// which ignored context cancellation.
 func (r *Resolver) waitForSubs(s *proxySession) bool {
-	for i := 0; i < waitForSubsTicks; i++ {
-		if s.subsState.Load() != subsPending {
-			return true
-		}
-		time.Sleep(waitForSubsInterval)
+	if s.subsState.Load() != subsPending {
+		return true
+	}
+	// Snapshot the done channel under the lock so we hold a reference even
+	// if the session is reaped (subsDone is immutable once assigned).
+	r.mu.Lock()
+	done := s.subsDone
+	r.mu.Unlock()
+	
+	const ceiling = waitForSubsInterval * waitForSubsTicks // 2.5s
+	if done == nil {
+		// Safety net: should never happen with the updated newSession.
+		time.Sleep(ceiling)
+		return s.subsState.Load() != subsPending
+	}
+	select {
+	case <-done:
+		// Subtitle ladder finished; state already flipped by SetSubRenditions.
+	case <-time.After(ceiling):
+		// Ceiling reached — proceed without renditions rather than stalling further.
 	}
 	return s.subsState.Load() != subsPending
 }

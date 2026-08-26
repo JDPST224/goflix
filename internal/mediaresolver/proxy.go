@@ -241,7 +241,9 @@ func (r *Resolver) Proxy(w http.ResponseWriter, req *http.Request, token string)
 	}
 	reader := bodyReader
 	if strings.EqualFold(strings.TrimSpace(resp.Header.Get("Content-Encoding")), "gzip") {
-		gz, gzErr := gzip.NewReader(resp.Body)
+		// bodyReader includes the sniffed head bytes; create the gzip reader
+		// from it, not from resp.Body which has already had those bytes consumed.
+		gz, gzErr := gzip.NewReader(bodyReader)
 		if gzErr != nil {
 			return fmt.Errorf("upstream returned an invalid gzip manifest: %w", gzErr)
 		}
@@ -318,8 +320,11 @@ func (m *boundedMirror) Write(p []byte) (int, error) {
 	if err != nil {
 		return n, err
 	}
-	if len(m.buf) < m.cap {
-		take := len(p)
+	// Mirror only the bytes actually forwarded to dst. On a partial write
+	// (n < len(p)), caching the full p would produce a cache entry whose
+	// tail bytes the player never received, corrupting subsequent serves.
+	if n > 0 && len(m.buf) < m.cap {
+		take := n
 		if room := m.cap - len(m.buf); take > room {
 			take = room
 		}

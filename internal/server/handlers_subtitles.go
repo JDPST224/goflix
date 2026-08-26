@@ -94,10 +94,16 @@ func (d Deps) subtitlesVidloveHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	subs := subtitles.FetchVidloveSubtitles(r.Context(), mediaType, id, season, episode)
+	// Bound the two-provider fallback ladder: Vidlove + Videasy each carry
+	// their own 10s client timeout; without an aggregate cap a slow pair
+	// could stall this request for up to 20s.
+	ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
+	defer cancel()
+
+	subs := subtitles.FetchVidloveSubtitles(ctx, mediaType, id, season, episode)
 	if len(subs) == 0 {
 		// Fallback to Videasy
-		subs = subtitles.FetchVideasySubtitles(r.Context(), id, season, episode)
+		subs = subtitles.FetchVideasySubtitles(ctx, id, season, episode)
 	}
 
 	if subs == nil {
