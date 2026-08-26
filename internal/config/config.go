@@ -22,6 +22,8 @@ type Config struct {
 	// API key when both are present.
 	TMDBAccessToken string
 	TMDBAPIKey      string
+	// ListenAddr is the TCP address the HTTP server binds to (default :8080).
+	ListenAddr string
 }
 
 // Load parses path (typically "config.conf") on top of the built-in defaults,
@@ -30,6 +32,7 @@ type Config struct {
 // is fatal (main fatals; a missing config file has always been fatal).
 func Load(path string) (Config, error) {
 	cfg := Config{
+		ListenAddr: ":8080",
 		Resolver: mediaresolver.Config{
 			TargetOrigin:            "https://vixsrc.to",
 			VidKingOrigin:           "https://www.vidking.net",
@@ -40,7 +43,8 @@ func Load(path string) (Config, error) {
 			BrowserTimeout:          45 * time.Second,
 			SourceResolutionTimeout: 20 * time.Second,
 			MaxBrowserSessions:      3,
-			CacheMaxBytes:           256 << 20,
+			CacheMaxBytes:           512 << 20,
+			MaxSessions:             200,
 		},
 	}
 
@@ -68,6 +72,10 @@ func Load(path string) (Config, error) {
 			cfg.TMDBAccessToken = cleanConfigValue(val)
 		case "TMDB_API_KEY":
 			cfg.TMDBAPIKey = cleanConfigValue(val)
+		case "LISTEN_ADDR":
+			if v := cleanConfigValue(val); v != "" {
+				cfg.ListenAddr = v
+			}
 		case "BROWSER_HEADLESS":
 			if v, err := strconv.ParseBool(val); err == nil {
 				cfg.Resolver.BrowserHeadless = v
@@ -85,6 +93,10 @@ func Load(path string) (Config, error) {
 		case "MAX_BROWSER_SESSIONS":
 			if v, err := strconv.Atoi(val); err == nil && v > 0 {
 				cfg.Resolver.MaxBrowserSessions = v
+			}
+		case "MAX_SESSIONS":
+			if v, err := strconv.Atoi(val); err == nil && v > 0 {
+				cfg.Resolver.MaxSessions = v
 			}
 		case "BROWSER_EXECUTABLE":
 			cfg.Resolver.BrowserExecutable = val
@@ -117,6 +129,9 @@ func Load(path string) (Config, error) {
 // applyEnvOverrides applies explicit runtime overrides on top of file values;
 // only variables that are actually set take effect.
 func applyEnvOverrides(cfg *Config) {
+	if v := os.Getenv("LISTEN_ADDR"); v != "" {
+		cfg.ListenAddr = v
+	}
 	if v := os.Getenv("BROWSER_HEADLESS"); v != "" {
 		if b, err := strconv.ParseBool(v); err == nil {
 			cfg.Resolver.BrowserHeadless = b
@@ -135,6 +150,11 @@ func applyEnvOverrides(cfg *Config) {
 	if v := os.Getenv("MAX_BROWSER_SESSIONS"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			cfg.Resolver.MaxBrowserSessions = n
+		}
+	}
+	if v := os.Getenv("MAX_SESSIONS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.Resolver.MaxSessions = n
 		}
 	}
 	if v := os.Getenv("BROWSER_EXECUTABLE"); v != "" {

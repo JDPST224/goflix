@@ -15,7 +15,7 @@ import (
 // prefix is the registered route prefix used to extract the TMDB ID — it is
 // NOT derived from the provider, because the legacy unprefixed vixsrc routes
 // ("/api/media/source/movie/...") carry no provider segment.
-func (d Deps) makeMovieSourceHandler(prefix, provider string) http.HandlerFunc {
+func (d *Deps) makeMovieSourceHandler(prefix, provider string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !corsGate(w, r, "GET", false) {
 			return
@@ -42,7 +42,7 @@ func (d Deps) makeMovieSourceHandler(prefix, provider string) http.HandlerFunc {
 // makeTVSourceHandler resolves a TV episode HLS source for the given provider.
 // prefix is the registered route prefix; the remainder of the path must be
 // <id>/<season>/<episode>.
-func (d Deps) makeTVSourceHandler(prefix, provider string) http.HandlerFunc {
+func (d *Deps) makeTVSourceHandler(prefix, provider string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !corsGate(w, r, "GET", false) {
 			return
@@ -70,7 +70,7 @@ func (d Deps) makeTVSourceHandler(prefix, provider string) http.HandlerFunc {
 
 // mediaProxyHandler streams upstream HLS playlists and segments through the
 // resolver's token-authenticated proxy.
-func (d Deps) mediaProxyHandler(w http.ResponseWriter, r *http.Request) {
+func (d *Deps) mediaProxyHandler(w http.ResponseWriter, r *http.Request) {
 	if !corsGate(w, r, "GET, HEAD", true) {
 		return
 	}

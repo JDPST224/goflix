@@ -8,16 +8,17 @@ import (
 	"goflix/internal/mediaresolver"
 )
 
-// Deps carries every collaborator the routes need.
+// Deps carries every collaborator the routes need. It is passed by pointer
+// so all handler methods share the same state with clear reference semantics.
 type Deps struct {
-	Resolver *mediaresolver.Resolver
-	Store    *catalog.Store
-	Client   *catalog.Client
+	Resolver  *mediaresolver.Resolver
+	Store     *catalog.Store
+	Client    *catalog.Client
 	// StartedAt anchors the uptime reported by /api/health.
 	StartedAt time.Time
 }
 
-func New(d Deps) http.Handler {
+func New(d *Deps) http.Handler {
 	mux := http.NewServeMux()
 
 	// Catalog JSON is large and repetitive — serve it gzipped. The media

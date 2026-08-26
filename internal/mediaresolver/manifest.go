@@ -209,3 +209,14 @@ func resolveMediaURL(base *url.URL, raw string) string {
 	}
 	return u.String()
 }
+
+// ForceHighestQuality extracts and returns only the highest quality variant.
+func ForceHighestQuality(text string) string {
+	return forceHighestQuality(text)
+}
+
+// RewriteManifest is an exported wrapper around rewriteManifest for testing and debug tools.
+func (r *Resolver) RewriteManifest(text string, base *url.URL, token string, req *http.Request) (string, map[string]bool) {
+	return r.rewriteManifest(text, base, token, req)
+}
+

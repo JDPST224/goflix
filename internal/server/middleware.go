@@ -5,6 +5,7 @@ package server
 import (
 	"compress/gzip"
 	"encoding/json"
+	"log"
 	"net/http"
 	"strings"
 	"sync"
@@ -15,8 +16,11 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(value)
+	if err := json.NewEncoder(w).Encode(value); err != nil {
+		log.Printf("[Server] json encode error: %v", err)
+	}
 }
+
 
 // writeError emits the {success:false,error:<msg>} envelope.
 func writeError(w http.ResponseWriter, status int, message string) {
@@ -26,10 +30,10 @@ func writeError(w http.ResponseWriter, status int, message string) {
 // jsonGate applies the catalog-handler preamble: standard JSON/CORS response
 // headers and method validation. It writes the response itself for OPTIONS
 // preflights (204) and unsupported methods (405 envelope + Allow), returning
-// false so the caller stops.
+// false so the caller stops. Cache-Control is intentionally NOT set here —
+// each handler owns its own caching policy.
 func jsonGate(w http.ResponseWriter, r *http.Request) bool {
 	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS")
 	w.Header().Set("Access-Control-Allow-Headers", "*")

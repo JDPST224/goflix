@@ -254,6 +254,12 @@ func injectSubRenditions(text string, subs []SubRendition) string {
 	return strings.Join(out, "\n")
 }
 
+// InjectSubRenditions appends external subtitle renditions to an HLS master manifest.
+func InjectSubRenditions(text string, subs []SubRendition) string {
+	return injectSubRenditions(text, subs)
+}
+
+
 // synthMediaMaster wraps a bare media playlist in a synthesized master so
 // subtitle renditions can be declared. VidKing hands out single-variant
 // media playlists with no master at all — without this there is nowhere to

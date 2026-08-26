@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"sync"
@@ -80,6 +81,11 @@ func (r *Resolver) newSession(source string, headers http.Header, allowed map[st
 			delete(r.sessions, tok)
 		}
 	}
+	// Enforce the session cap after evicting expired sessions so a long-running
+	// server doesn't hit the cap due to accumulated stale entries.
+	if len(r.sessions) >= r.maxSessions() {
+		return "", fmt.Errorf("session cap (%d) reached — too many concurrent viewers", r.maxSessions())
+	}
 	if headers == nil {
 		headers = make(http.Header)
 	}
@@ -100,6 +106,7 @@ func (r *Resolver) newSession(source string, headers http.Header, allowed map[st
 	}
 	return token, nil
 }
+
 
 func cloneHeader(in http.Header) http.Header {
 	out := make(http.Header)

@@ -35,7 +35,7 @@ import (
 // The resulting session forwards those same headers on every upstream fetch so
 // variant playlists, audio/subtitle renditions and CDN segments all pass the
 // endpoint's checks.
-const vixsrcOrigin = "https://vixsrc.to"
+
 
 // vixsrcMasterBlockCap bounds how much HTML after the window.masterPlaylist
 // marker is searched for the params/url literals.
@@ -95,6 +95,8 @@ func (r *Resolver) tryVixsrcDirect(parent context.Context, req MediaRequest) (st
 // the master playlist directly.
 func (r *Resolver) resolveVixsrcDirect(ctx context.Context, req MediaRequest) (*directResolution, error) {
 	client := &http.Client{Transport: r.transport, Timeout: 12 * time.Second}
+	// Use the configured origin (cfg.TargetOrigin) so VIXSRC_ORIGIN overrides work.
+	origin := r.cfg.TargetOrigin
 	get := func(raw, referer string, limit int64) ([]byte, int, error) {
 		req2, err := http.NewRequestWithContext(ctx, http.MethodGet, raw, nil)
 		if err != nil {
@@ -118,14 +120,14 @@ func (r *Resolver) resolveVixsrcDirect(ctx context.Context, req MediaRequest) (*
 	}
 
 	apiPath := "/api/movie/" + url.PathEscape(req.ID)
-	pageRef := vixsrcOrigin + "/movie/" + url.PathEscape(req.ID)
+	pageRef := origin + "/movie/" + url.PathEscape(req.ID)
 	if req.Type == TV {
 		apiPath = "/api/tv/" + url.PathEscape(req.ID) + "/" + url.PathEscape(req.Season) + "/" + url.PathEscape(req.Episode)
-		pageRef = vixsrcOrigin + "/tv/" + url.PathEscape(req.ID) + "/" + url.PathEscape(req.Season) + "/" + url.PathEscape(req.Episode)
+		pageRef = origin + "/tv/" + url.PathEscape(req.ID) + "/" + url.PathEscape(req.Season) + "/" + url.PathEscape(req.Episode)
 	}
 
 	// Step 1: stream API returns the tokenized embed path.
-	srcBody, status, err := get(vixsrcOrigin+apiPath, vixsrcOrigin+"/", 64<<10)
+	srcBody, status, err := get(origin+apiPath, origin+"/", 64<<10)
 	if err != nil {
 		return nil, fmt.Errorf("stream API: %w", err)
 	}
@@ -138,7 +140,7 @@ func (r *Resolver) resolveVixsrcDirect(ctx context.Context, req MediaRequest) (*
 	if json.Unmarshal(srcBody, &srcPayload) != nil || strings.TrimSpace(srcPayload.Src) == "" {
 		return nil, errors.New("stream API returned no embed src")
 	}
-	embedURL := vixsrcOrigin + srcPayload.Src
+	embedURL := origin + srcPayload.Src
 
 	// Step 2: embed page carries the masterPlaylist params.
 	html, status, err := get(embedURL, pageRef, vixsrcEmbedHTMLCap)
@@ -148,7 +150,7 @@ func (r *Resolver) resolveVixsrcDirect(ctx context.Context, req MediaRequest) (*
 	if status != http.StatusOK {
 		return nil, fmt.Errorf("embed page returned status %d", status)
 	}
-	res, err := parseVixsrcEmbed(string(html), embedURL)
+	res, err := parseVixsrcEmbed(string(html), embedURL, origin)
 	if err != nil {
 		return nil, err
 	}
@@ -181,7 +183,8 @@ func (r *Resolver) resolveVixsrcDirect(ctx context.Context, req MediaRequest) (*
 
 // parseVixsrcEmbed extracts the master playlist URL from an embed page's
 // window.masterPlaylist block and appends the required query parameters.
-func parseVixsrcEmbed(html, embedURL string) (*directResolution, error) {
+// origin is the configured VixSrc origin used to validate the parsed URL host.
+func parseVixsrcEmbed(html, embedURL, origin string) (*directResolution, error) {
 	i := strings.Index(html, "window.masterPlaylist")
 	if i < 0 {
 		return nil, errors.New("embed page has no masterPlaylist block")
@@ -200,8 +203,17 @@ func parseVixsrcEmbed(html, embedURL string) (*directResolution, error) {
 		return nil, errors.New("masterPlaylist block missing url/token/expires")
 	}
 	u, err := url.Parse(mURL[1])
-	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || !strings.Contains(u.Host, "vixsrc.to") {
+	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
 		return nil, fmt.Errorf("masterPlaylist url %q invalid", redactQuery(mURL[1]))
+	}
+	// Validate the master playlist host against the configured origin so a
+	// page served from an alternate domain can't redirect us elsewhere.
+	originHost := ""
+	if ou, oe := url.Parse(origin); oe == nil {
+		originHost = strings.ToLower(ou.Host)
+	}
+	if originHost != "" && !strings.EqualFold(u.Host, originHost) && !strings.HasSuffix(strings.ToLower(u.Host), "."+originHost) {
+		return nil, fmt.Errorf("masterPlaylist host %q outside configured origin %q", u.Host, originHost)
 	}
 	q := u.Query()
 	q.Set("token", token)

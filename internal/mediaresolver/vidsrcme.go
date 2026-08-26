@@ -63,19 +63,41 @@ type vidsrcmeAPIResponse struct {
 	} `json:"vs"`
 }
 
-// wasmModuleCache caches compiled WebAssembly modules across requests by window ID.
+// wasmEntry wraps a compiled module with a last-used timestamp for LRU eviction.
+type wasmEntry struct {
+	mod      wazero.CompiledModule
+	lastUsed time.Time
+}
+
+// wasmCacheMax is the maximum number of compiled WASM modules retained in memory.
+// When reached the least-recently-used entry is evicted.
+const wasmCacheMax = 16
+
+// wasmModuleCache caches compiled WebAssembly modules on the Resolver by window ID.
+// Access is guarded by wasmCacheMu.
 var (
 	wasmCacheMu sync.Mutex
-	wasmCache   = make(map[int64]wazero.CompiledModule)
-	wasmRuntime wazero.Runtime
-	wasmOnce    sync.Once
+	wasmCache   = make(map[int64]*wasmEntry)
 )
 
-func getWasmRuntime(ctx context.Context) wazero.Runtime {
-	wasmOnce.Do(func() {
-		wasmRuntime = wazero.NewRuntime(context.Background())
-	})
-	return wasmRuntime
+// getOrInitWasmRuntime returns the wazero runtime from the Resolver, initialising
+// it exactly once via sync.Once semantics. The runtime is stored as an interface
+// so the resolver.go file does not import wazero directly.
+func (r *Resolver) getOrInitWasmRuntime() wazero.Runtime {
+	wasmCacheMu.Lock()
+	defer wasmCacheMu.Unlock()
+	if r.wasmRuntime == nil {
+		rt := wazero.NewRuntime(context.Background())
+		r.wasmRuntime = rt
+		return rt
+	}
+	// Type-assert safely; wasmRuntime is always set to wazero.Runtime by this function.
+	if rt, ok := r.wasmRuntime.(wazero.Runtime); ok {
+		return rt
+	}
+	rt := wazero.NewRuntime(context.Background())
+	r.wasmRuntime = rt
+	return rt
 }
 
 // tryVidsrcmeDirect resolves vidsrcme without a browser, registers the proxy
@@ -233,7 +255,7 @@ func (r *Resolver) decryptVidsrcmeStreamURLs(ctx context.Context, client *http.C
 		return nil, fmt.Errorf("base64 decode ciphertext: %w", err)
 	}
 
-	rt := getWasmRuntime(ctx)
+	rt := r.getOrInitWasmRuntime()
 
 	// Obtain compiled module (cached by window ID)
 	compiled, err := r.getCompiledWasm(ctx, client, rt, apiRes)
@@ -289,14 +311,16 @@ func (r *Resolver) decryptVidsrcmeStreamURLs(ctx context.Context, client *http.C
 }
 
 // getCompiledWasm loads or compiles the WASM module for the given window ID.
+// Evicts the least-recently-used entry when the cache exceeds wasmCacheMax.
 func (r *Resolver) getCompiledWasm(ctx context.Context, client *http.Client, rt wazero.Runtime, apiRes vidsrcmeAPIResponse) (wazero.CompiledModule, error) {
 	wasmCacheMu.Lock()
 	defer wasmCacheMu.Unlock()
 
 	w := apiRes.VS.W
 	if w != 0 {
-		if cached, ok := wasmCache[w]; ok {
-			return cached, nil
+		if entry, ok := wasmCache[w]; ok {
+			entry.lastUsed = time.Now()
+			return entry.mod, nil
 		}
 	}
 
@@ -340,7 +364,20 @@ func (r *Resolver) getCompiledWasm(ctx context.Context, client *http.Client, rt 
 	}
 
 	if w != 0 {
-		wasmCache[w] = compiled
+		// Enforce LRU cap before inserting new entry.
+		if len(wasmCache) >= wasmCacheMax {
+			// Find and evict the least-recently-used entry.
+			var oldestKey int64
+			var oldest time.Time
+			for k, e := range wasmCache {
+				if oldest.IsZero() || e.lastUsed.Before(oldest) {
+					oldest = e.lastUsed
+					oldestKey = k
+				}
+			}
+			delete(wasmCache, oldestKey)
+		}
+		wasmCache[w] = &wasmEntry{mod: compiled, lastUsed: time.Now()}
 	}
 	return compiled, nil
 }
@@ -354,6 +391,20 @@ var (
 	cdnTokenMu    sync.Mutex
 	cdnTokenCache = make(map[string]cdnTokenEntry)
 )
+
+// evictExpiredCDNTokens removes all expired entries from cdnTokenCache.
+// Called by the session sweeper in resolver.go so the map doesn't grow unboundedly.
+func evictExpiredCDNTokens() {
+	now := time.Now()
+	cdnTokenMu.Lock()
+	defer cdnTokenMu.Unlock()
+	for origin, entry := range cdnTokenCache {
+		if now.After(entry.expiresAt) {
+			delete(cdnTokenCache, origin)
+		}
+	}
+}
+
 
 // fetchVidsrcmeCDNToken retrieves the JWT playback authorization token from {cdnOrigin}/generate.php,
 // caching valid tokens for up to 5 minutes to avoid rate-limit (429) errors.

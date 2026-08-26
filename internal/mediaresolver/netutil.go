@@ -70,10 +70,10 @@ func errStringOrStatus(err error, resp *http.Response) string {
 	return "status " + strconv.Itoa(resp.StatusCode)
 }
 
-// parseByteRange parses a single-range "bytes=" header against a body of the
+// ParseByteRange parses a single-range "bytes=" header against a body of the
 // given size. Multi-range and unsatisfiable specs report ok=false, in which
 // case the caller serves the full body.
-func parseByteRange(spec string, size int64) (start, end int64, ok bool) {
+func ParseByteRange(spec string, size int64) (start, end int64, ok bool) {
 	spec = strings.TrimSpace(spec)
 	if !strings.HasPrefix(spec, "bytes=") || size <= 0 {
 		return 0, 0, false
@@ -116,7 +116,9 @@ func parseByteRange(spec string, size int64) (start, end int64, ok bool) {
 	}
 }
 
-func isBlockedIP(ip net.IP) bool {
+var parseByteRange = ParseByteRange
+
+func IsBlockedIP(ip net.IP) bool {
 	if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() ||
 		ip.IsLinkLocalMulticast() || ip.IsMulticast() || ip.IsUnspecified() {
 		return true
@@ -128,6 +130,8 @@ func isBlockedIP(ip net.IP) bool {
 	}
 	return false
 }
+
+var isBlockedIP = IsBlockedIP
 
 // dnsCacheEntry memoizes the SSRF verdict for one hostname. Both allowed and
 // blocked results are cached briefly: manifest/segment playback resolves the
@@ -173,8 +177,8 @@ func (r *Resolver) blockedUpstreamHost(ctx context.Context, host string) bool {
 	return blocked
 }
 
-// redactQuery strips query strings from URLs before they are written to logs.
-func redactQuery(raw string) string {
+// RedactQuery strips query strings from URLs before they are written to logs.
+func RedactQuery(raw string) string {
 	u, err := url.Parse(raw)
 	if err != nil {
 		return "(unparseable URL)"
@@ -183,3 +187,6 @@ func redactQuery(raw string) string {
 	u.Fragment = ""
 	return u.String()
 }
+
+var redactQuery = RedactQuery
+

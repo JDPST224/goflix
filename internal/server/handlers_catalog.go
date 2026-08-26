@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -11,7 +12,14 @@ import (
 	"goflix/internal/catalog"
 )
 
-func (d Deps) moviesHandler(w http.ResponseWriter, r *http.Request) {
+// writeCatalogJSON encodes v as JSON to w, logging any error encountered.
+func writeCatalogJSON(w http.ResponseWriter, v any) {
+	if err := json.NewEncoder(w).Encode(v); err != nil {
+		log.Printf("[Server] json encode error: %v", err)
+	}
+}
+
+func (d *Deps) moviesHandler(w http.ResponseWriter, r *http.Request) {
 	if !jsonGate(w, r) {
 		return
 	}
@@ -20,12 +28,11 @@ func (d Deps) moviesHandler(w http.ResponseWriter, r *http.Request) {
 	if movies == nil {
 		movies = []catalog.Movie{}
 	}
-	json.NewEncoder(w).Encode(movies)
+	writeCatalogJSON(w, movies)
 }
 
-// tvShowsHandler serves the cached TV show list. Cache-Control mirrors the
-// movies handler: public max-age=60 overrides jsonGate's no-cache default.
-func (d Deps) tvShowsHandler(w http.ResponseWriter, r *http.Request) {
+// tvShowsHandler serves the cached TV show list.
+func (d *Deps) tvShowsHandler(w http.ResponseWriter, r *http.Request) {
 	if !jsonGate(w, r) {
 		return
 	}
@@ -34,10 +41,10 @@ func (d Deps) tvShowsHandler(w http.ResponseWriter, r *http.Request) {
 	if shows == nil {
 		shows = []catalog.Movie{}
 	}
-	json.NewEncoder(w).Encode(shows)
+	writeCatalogJSON(w, shows)
 }
 
-func (d Deps) popularHandler(w http.ResponseWriter, r *http.Request) {
+func (d *Deps) popularHandler(w http.ResponseWriter, r *http.Request) {
 	if !jsonGate(w, r) {
 		return
 	}
@@ -46,12 +53,12 @@ func (d Deps) popularHandler(w http.ResponseWriter, r *http.Request) {
 	if pop == nil {
 		pop = []catalog.Movie{}
 	}
-	json.NewEncoder(w).Encode(pop)
+	writeCatalogJSON(w, pop)
 }
 
 // providersHandler serves the cached "Only on …" carousel map, keyed by
 // provider (netflix, prime, max, ...). Empty map when never populated.
-func (d Deps) providersHandler(w http.ResponseWriter, r *http.Request) {
+func (d *Deps) providersHandler(w http.ResponseWriter, r *http.Request) {
 	if !jsonGate(w, r) {
 		return
 	}
@@ -60,10 +67,10 @@ func (d Deps) providersHandler(w http.ResponseWriter, r *http.Request) {
 	if providers == nil {
 		providers = map[string][]catalog.Movie{}
 	}
-	json.NewEncoder(w).Encode(providers)
+	writeCatalogJSON(w, providers)
 }
 
-func (d Deps) homeHandler(w http.ResponseWriter, r *http.Request) {
+func (d *Deps) homeHandler(w http.ResponseWriter, r *http.Request) {
 	if !jsonGate(w, r) {
 		return
 	}
@@ -72,24 +79,25 @@ func (d Deps) homeHandler(w http.ResponseWriter, r *http.Request) {
 	if combined == nil {
 		combined = []catalog.Movie{}
 	}
-	json.NewEncoder(w).Encode(combined)
+	writeCatalogJSON(w, combined)
 }
 
 // searchHandler proxies TMDB search. type=movie/tv selects a scoped search;
 // empty type runs the multi search, mapping media_type per result.
-func (d Deps) searchHandler(w http.ResponseWriter, r *http.Request) {
+func (d *Deps) searchHandler(w http.ResponseWriter, r *http.Request) {
 	if !jsonGate(w, r) {
 		return
 	}
+	w.Header().Set("Cache-Control", "no-cache")
 	if !d.Client.HasCredentials() {
 		w.WriteHeader(http.StatusServiceUnavailable)
-		json.NewEncoder(w).Encode([]catalog.Movie{})
+		writeCatalogJSON(w, []catalog.Movie{})
 		return
 	}
 	query := strings.TrimSpace(r.URL.Query().Get("q"))
 	mediaType := strings.TrimSpace(r.URL.Query().Get("type"))
 	if query == "" {
-		json.NewEncoder(w).Encode([]catalog.Movie{})
+		writeCatalogJSON(w, []catalog.Movie{})
 		return
 	}
 	encoded := url.QueryEscape(query)
@@ -105,27 +113,29 @@ func (d Deps) searchHandler(w http.ResponseWriter, r *http.Request) {
 	if results == nil {
 		results = []catalog.Movie{}
 	}
-	json.NewEncoder(w).Encode(results)
+	writeCatalogJSON(w, results)
 }
 
 // discoverHandler serves one page of TMDB discover results for a genre,
 // powering the Movies/TV Shows genre grid's infinite scroll. Response shape
 // matches the other catalog endpoints: a plain array of Movies. An empty
 // array means "no more pages" to the frontend.
-func (d Deps) discoverHandler(w http.ResponseWriter, r *http.Request) {
+func (d *Deps) discoverHandler(w http.ResponseWriter, r *http.Request) {
 	if !jsonGate(w, r) {
 		return
 	}
 	if !d.Client.HasCredentials() {
+		w.Header().Set("Cache-Control", "no-cache")
 		w.WriteHeader(http.StatusServiceUnavailable)
-		json.NewEncoder(w).Encode([]catalog.Movie{})
+		writeCatalogJSON(w, []catalog.Movie{})
 		return
 	}
 	page, err := strconv.Atoi(strings.TrimSpace(r.URL.Query().Get("page")))
 	// Page cap is TMDB's discover limit; beyond it the API just errors.
 	if err != nil || page < 1 || page > 500 {
+		w.Header().Set("Cache-Control", "no-cache")
 		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode([]catalog.Movie{})
+		writeCatalogJSON(w, []catalog.Movie{})
 		return
 	}
 	// Provider feed: one movie page and one TV page per grid page, both
@@ -134,7 +144,8 @@ func (d Deps) discoverHandler(w http.ResponseWriter, r *http.Request) {
 	if providerKey := strings.TrimSpace(r.URL.Query().Get("provider")); providerKey != "" {
 		id, label, ok := catalog.ProviderInfo(providerKey)
 		if !ok {
-			json.NewEncoder(w).Encode([]catalog.Movie{})
+			w.Header().Set("Cache-Control", "no-cache")
+			writeCatalogJSON(w, []catalog.Movie{})
 			return
 		}
 		w.Header().Set("Cache-Control", "public, max-age=300")
@@ -148,21 +159,23 @@ func (d Deps) discoverHandler(w http.ResponseWriter, r *http.Request) {
 		if results == nil {
 			results = []catalog.Movie{}
 		}
-		json.NewEncoder(w).Encode(results)
+		writeCatalogJSON(w, results)
 		return
 	}
 	mediaType := strings.TrimSpace(r.URL.Query().Get("type"))
 	genreName := strings.TrimSpace(r.URL.Query().Get("genre"))
 	if (mediaType != "movie" && mediaType != "tv") || genreName == "" {
+		w.Header().Set("Cache-Control", "no-cache")
 		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode([]catalog.Movie{})
+		writeCatalogJSON(w, []catalog.Movie{})
 		return
 	}
 	genreID, ok := catalog.GenreID(genreName)
 	if !ok {
 		// Unknown name (frontend chips always come from our own map): no
 		// server pages to add, empty array ends the frontend feed.
-		json.NewEncoder(w).Encode([]catalog.Movie{})
+		w.Header().Set("Cache-Control", "no-cache")
+		writeCatalogJSON(w, []catalog.Movie{})
 		return
 	}
 	// Discover pages shift slowly; a longer TTL than the catalog handlers'
@@ -173,15 +186,16 @@ func (d Deps) discoverHandler(w http.ResponseWriter, r *http.Request) {
 	if results == nil {
 		results = []catalog.Movie{}
 	}
-	json.NewEncoder(w).Encode(results)
+	writeCatalogJSON(w, results)
 }
 
 // detailHandler passes the TMDB detail payload through with the modal's
 // append_to_response set; status mapping (500/502/{}) lives in the client.
-func (d Deps) detailHandler(w http.ResponseWriter, r *http.Request) {
+func (d *Deps) detailHandler(w http.ResponseWriter, r *http.Request) {
 	if !jsonGate(w, r) {
 		return
 	}
+	w.Header().Set("Cache-Control", "no-cache")
 	if !d.Client.HasCredentials() {
 		w.WriteHeader(http.StatusServiceUnavailable)
 		w.Write([]byte(`{}`))
@@ -199,10 +213,11 @@ func (d Deps) detailHandler(w http.ResponseWriter, r *http.Request) {
 	w.Write(body)
 }
 
-func (d Deps) episodesHandler(w http.ResponseWriter, r *http.Request) {
+func (d *Deps) episodesHandler(w http.ResponseWriter, r *http.Request) {
 	if !jsonGate(w, r) {
 		return
 	}
+	w.Header().Set("Cache-Control", "no-cache")
 	if !d.Client.HasCredentials() {
 		w.WriteHeader(http.StatusServiceUnavailable)
 		w.Write([]byte(`{}`))

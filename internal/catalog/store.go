@@ -340,15 +340,19 @@ func (s *Store) HomeView() []Movie {
 		}
 	}
 
-	// Cache tags do not always match the Home row labels.
+	// Cache tags do not always match the Home row labels. Copy the source
+	// slices before appending to avoid mutating shared backing arrays (A13).
 	if items, ok := moviesBycat["Trending Now"]; ok {
-		moviesBycat["Trending Movies"] = append(moviesBycat["Trending Movies"], items...)
+		existing := append([]Movie(nil), moviesBycat["Trending Movies"]...)
+		moviesBycat["Trending Movies"] = append(existing, items...)
 	}
 	if items, ok := moviesBycat["Popular"]; ok {
-		moviesBycat["Popular Movies"] = append(moviesBycat["Popular Movies"], items...)
+		existing := append([]Movie(nil), moviesBycat["Popular Movies"]...)
+		moviesBycat["Popular Movies"] = append(existing, items...)
 	}
 	if items, ok := moviesBycat["Top Rated"]; ok {
-		moviesBycat["Top Rated Movies"] = append(moviesBycat["Top Rated Movies"], items...)
+		existing := append([]Movie(nil), moviesBycat["Top Rated Movies"]...)
+		moviesBycat["Top Rated Movies"] = append(existing, items...)
 	}
 
 	var combined []Movie
@@ -404,20 +408,20 @@ func InterleaveMovies(a, b []Movie) []Movie {
 	return out
 }
 
-// StartRefreshLoop performs the initial parallel fetch and then refreshes all
-// three caches every 30 minutes. ctx controls the goroutine lifetime: cancel
-// it (or let SIGTERM close it) to stop the background loop cleanly.
+// StartRefreshLoop fires the initial parallel fetch asynchronously (so the
+// HTTP server can start accepting requests immediately) and then refreshes all
+// caches every 30 minutes. ctx controls the goroutine lifetime: cancel it (or
+// let SIGTERM close it) to stop the background loop cleanly.
 // Call only when credentials are configured.
 func (s *Store) StartRefreshLoop(ctx context.Context) {
-	done := make(chan struct{}, 4)
-	go func() { s.RefreshMovies(); done <- struct{}{} }()
-	go func() { s.RefreshTVShows(); done <- struct{}{} }()
-	go func() { s.RefreshPopular(); done <- struct{}{} }()
-	go func() { s.RefreshProviders(); done <- struct{}{} }()
-	<-done
-	<-done
-	<-done
-	<-done
+	// Kick off the initial population in the background — callers that need
+	// fresh data before the first tick can call WaitReady.
+	go func() {
+		s.RefreshMovies()
+		s.RefreshTVShows()
+		s.RefreshPopular()
+		s.RefreshProviders()
+	}()
 
 	ticker := time.NewTicker(30 * time.Minute)
 	go func() {
@@ -435,6 +439,7 @@ func (s *Store) StartRefreshLoop(ctx context.Context) {
 		}
 	}()
 }
+
 
 // Seed installs cache contents directly — used by tests to exercise the
 // handlers without hitting TMDB.

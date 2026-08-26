@@ -55,15 +55,20 @@ func main() {
 		store.StartRefreshLoop(ctx)
 	}
 
-	handler := server.New(server.Deps{
+	handler := server.New(&server.Deps{
 		Resolver:  resolver,
 		Store:     store,
 		Client:    client,
 		StartedAt: time.Now(),
 	})
 
+	listenAddr := cfg.ListenAddr
+	if listenAddr == "" {
+		listenAddr = ":8080"
+	}
+
 	srv := &http.Server{
-		Addr:              ":8080",
+		Addr:              listenAddr,
 		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       60 * time.Second,
@@ -75,11 +80,12 @@ func main() {
 	// connections and release browser sessions before exiting.
 
 	go func() {
-		log.Println("Server listening on :8080 — open http://localhost:8080")
+		log.Printf("Server listening on %s\n", listenAddr)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatal("Error starting server: ", err)
 		}
 	}()
+
 
 	<-ctx.Done()
 	log.Println("Shutdown signal received — draining connections...")

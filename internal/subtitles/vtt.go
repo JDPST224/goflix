@@ -13,9 +13,9 @@ type vttCue struct {
 	start, end float64
 }
 
-// parseCueTimestamp parses "HH:MM:SS.mmm" / "MM:SS.mmm" (WebVTT) and their
+// ParseCueTimestamp parses "HH:MM:SS.mmm" / "MM:SS.mmm" (WebVTT) and their
 // SRT comma variants into seconds.
-func parseCueTimestamp(s string) (float64, bool) {
+func ParseCueTimestamp(s string) (float64, bool) {
 	s = strings.TrimSpace(s)
 	if s == "" {
 		return 0, false
@@ -40,6 +40,8 @@ func parseCueTimestamp(s string) (float64, bool) {
 	}
 	return hours*3600 + mins*60 + secs, true
 }
+
+var parseCueTimestamp = ParseCueTimestamp
 
 // normalizeCueText folds a cue's text lines into one comparison key.
 func normalizeCueText(lines []string) string {

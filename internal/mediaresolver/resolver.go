@@ -25,7 +25,8 @@ const (
 type MediaRequest struct {
 	Type                MediaType
 	ID, Season, Episode string
-	Provider            string
+	// Provider is normalized to lowercase with no surrounding whitespace.
+	Provider string
 }
 
 type hlsCandidate struct {
@@ -48,6 +49,10 @@ type Config struct {
 	// manifests/segments and read-ahead data from RAM. Defaults to 256 MiB
 	// when <= 0 (CACHE_MAX_MB).
 	CacheMaxBytes int64
+	// MaxSessions caps the total number of concurrent proxy sessions.
+	// New Resolve calls return an error when the cap is reached.
+	// Defaults to 200 when <= 0.
+	MaxSessions int
 }
 
 // playbackHeaders are the browser headers captured during resolution and
@@ -124,6 +129,10 @@ const (
 	// A read-ahead stuck on a stalled upstream stream must not hold live
 	// playback hostage for its entire timeout window.
 	inflightJoinWait = 4 * time.Second
+
+	// defaultMaxSessions is the cap on concurrent proxy sessions when
+	// Config.MaxSessions is not set.
+	defaultMaxSessions = 200
 )
 
 type Resolver struct {
@@ -150,6 +159,9 @@ type Resolver struct {
 	// into the master manifest as TYPE=SUBTITLES entries so native-HLS
 	// engines (smart TVs) see the tracks without any frontend help.
 	SubRenditionProvider func(ctx context.Context, req MediaRequest) []SubRendition
+	// wasmRuntime is the wazero runtime used by the VidSrcMe resolver.
+	// Stored here so it can be closed cleanly on shutdown.
+	wasmRuntime interface{ Close(context.Context) error }
 }
 
 func New(cfg Config) (*Resolver, error) {
@@ -264,6 +276,9 @@ func New(cfg Config) (*Resolver, error) {
 					}
 					return true
 				})
+				// Evict expired CDN token cache entries (VidSrcMe).
+				evictExpiredCDNTokens()
+
 			}
 		}
 	}()
@@ -288,6 +303,10 @@ func (r *Resolver) Close() {
 		c() // stop every session's read-ahead pipeline
 	}
 	r.transport.CloseIdleConnections()
+	// Close the WebAssembly runtime if one was allocated.
+	if r.wasmRuntime != nil {
+		_ = r.wasmRuntime.Close(context.Background())
+	}
 }
 
 func (r *Resolver) isClosed() bool {
@@ -303,7 +322,16 @@ func (r *Resolver) sessionTTL() time.Duration {
 	return defaultSessionTTL
 }
 
+func (r *Resolver) maxSessions() int {
+	if r.cfg.MaxSessions > 0 {
+		return r.cfg.MaxSessions
+	}
+	return defaultMaxSessions
+}
+
 func (r *Resolver) Resolve(parent context.Context, req MediaRequest) (string, error) {
+	// Normalize provider once here so all downstream code can rely on it.
+	req.Provider = strings.ToLower(strings.TrimSpace(req.Provider))
 	if err := validateRequest(req); err != nil {
 		return "", err
 	}
@@ -318,7 +346,7 @@ func (r *Resolver) Resolve(parent context.Context, req MediaRequest) (string, er
 	// never observe it), and vixsrc's master playlist URL is reconstructible
 	// from its embed page (see vixsrc.go). Both fall back to the generic
 	// browser path when their direct attempt fails.
-	switch strings.ToLower(strings.TrimSpace(req.Provider)) {
+	switch req.Provider {
 	case "", "vixsrc":
 		if proxyURL, ok := r.tryVixsrcDirect(parent, req); ok {
 			return proxyURL, nil
@@ -388,42 +416,48 @@ func (r *Resolver) Resolve(parent context.Context, req MediaRequest) (string, er
 	return "", lastErr
 }
 
+// targetURL builds the provider embed page URL for the browser fallback path.
+// Provider has already been normalized to lowercase with no whitespace.
 func (r *Resolver) targetURL(req MediaRequest) (string, error) {
-	origin := r.cfg.TargetOrigin
-	if strings.EqualFold(strings.TrimSpace(req.Provider), "vidking") {
+	var origin string
+	var path string
+
+	switch req.Provider {
+	case "vidking":
 		origin = r.cfg.VidKingOrigin
-	} else if strings.EqualFold(strings.TrimSpace(req.Provider), "vidlove") {
+		if req.Type == Movie {
+			path = "/embed/movie/" + req.ID
+		} else {
+			path = "/embed/tv/" + req.ID + "/" + req.Season + "/" + req.Episode
+		}
+	case "vidlove":
 		origin = r.cfg.VidLoveOrigin
-	} else if strings.EqualFold(strings.TrimSpace(req.Provider), "vidsrcme") || strings.EqualFold(strings.TrimSpace(req.Provider), "vidsrc") {
+		if req.Type == Movie {
+			path = "/embed/movie/" + req.ID
+		} else {
+			path = "/embed/tv/" + req.ID + "/" + req.Season + "/" + req.Episode
+		}
+	case "vidsrcme", "vidsrc":
 		origin = r.cfg.VidsrcmeOrigin
+		if req.Type == Movie {
+			path = "/embed/movie?tmdb=" + req.ID
+		} else {
+			path = "/embed/tv?tmdb=" + req.ID + "&season=" + req.Season + "&episode=" + req.Episode
+		}
+	default: // "", "vixsrc"
+		origin = r.cfg.TargetOrigin
+		if req.Type == Movie {
+			path = "/movie/" + req.ID
+		} else {
+			path = "/tv/" + req.ID + "/" + req.Season + "/" + req.Episode
+		}
 	}
+
 	base, err := url.Parse(origin)
 	if err != nil {
 		return "", err
 	}
-	var p string
-	switch req.Type {
-	case Movie:
-		p = "/movie/" + req.ID
-	case TV:
-		p = "/tv/" + req.ID + "/" + req.Season + "/" + req.Episode
-	default:
-		return "", errors.New("unsupported media type")
-	}
-	if strings.EqualFold(strings.TrimSpace(req.Provider), "vidking") || strings.EqualFold(strings.TrimSpace(req.Provider), "vidlove") {
-		if req.Type == Movie {
-			p = "/embed/movie/" + req.ID
-		} else {
-			p = "/embed/tv/" + req.ID + "/" + req.Season + "/" + req.Episode
-		}
-	} else if strings.EqualFold(strings.TrimSpace(req.Provider), "vidsrcme") || strings.EqualFold(strings.TrimSpace(req.Provider), "vidsrc") {
-		if req.Type == Movie {
-			p = "/embed/movie?tmdb=" + req.ID
-		} else {
-			p = "/embed/tv?tmdb=" + req.ID + "&season=" + req.Season + "&episode=" + req.Episode
-		}
-	}
-	u, err := base.Parse(p)
+	u, err := base.Parse(path)
 	if err != nil {
 		return "", err
 	}
@@ -434,6 +468,7 @@ func (r *Resolver) targetURL(req MediaRequest) (string, error) {
 }
 
 func validateRequest(r MediaRequest) error {
+	// Provider is already normalized by the caller (Resolve).
 	switch r.Type {
 	case Movie:
 		if !validNumeric(r.ID) {
@@ -446,7 +481,7 @@ func validateRequest(r MediaRequest) error {
 	default:
 		return errors.New("unsupported media type")
 	}
-	switch strings.ToLower(strings.TrimSpace(r.Provider)) {
+	switch r.Provider {
 	case "", "vixsrc", "vidking", "vidlove", "vidsrcme", "vidsrc":
 		return nil
 	default:
@@ -454,7 +489,7 @@ func validateRequest(r MediaRequest) error {
 	}
 }
 
-func validNumeric(s string) bool {
+func ValidNumeric(s string) bool {
 	if s == "" || len(s) > 20 {
 		return false
 	}
@@ -465,3 +500,6 @@ func validNumeric(s string) bool {
 	}
 	return true
 }
+
+var validNumeric = ValidNumeric
+

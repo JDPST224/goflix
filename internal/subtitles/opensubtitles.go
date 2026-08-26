@@ -34,9 +34,9 @@ type FrontendSubtitle struct {
 	URL      string `json:"url"`
 }
 
-var (
+const (
 	opensubtitlesAPIOrigin = "https://rest.opensubtitles.org"
-	vidloveAPIOrigin = "https://api.shows.st"
+	vidloveAPIOrigin       = "https://api.shows.st"
 )
 
 // Client is shared across all subtitle search/download requests.

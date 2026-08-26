@@ -10,7 +10,7 @@ import (
 	"net/url"
 )
 
-var vidsrcmeDataOrigin = "https://data.vidsrcme.ru"
+const vidsrcmeDataOrigin = "https://data.vidsrcme.ru"
 
 // FetchVidsrcmeSubtitles queries the VidSrcMe API and maps the default_subs results
 // to the frontend subtitle shape.

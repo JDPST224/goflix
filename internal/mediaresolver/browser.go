@@ -445,6 +445,12 @@ func candidateScore(c hlsCandidate) int {
 	}
 }
 
+// CandidateScore ranks how likely an HLS candidate URL is the primary playback manifest.
+func CandidateScore(rawURL, contentType string) int {
+	return candidateScore(hlsCandidate{url: rawURL, contentType: contentType})
+}
+
+
 func chooseCandidate(cs []hlsCandidate) hlsCandidate {
 	bestScore := -1
 	var best hlsCandidate

@@ -66,7 +66,7 @@ func validLocalSubtitleWrapSrc(p string) bool {
 //
 //	POST /api/media/subs/<token>
 //	body: {"subtitles":[{"label":"English","language":"en","url":"/api/subtitles/..."}]}
-func (d Deps) subsRegisterHandler(w http.ResponseWriter, r *http.Request) {
+func (d *Deps) subsRegisterHandler(w http.ResponseWriter, r *http.Request) {
 	if !corsGate(w, r, "POST", false) {
 		return
 	}
@@ -75,8 +75,8 @@ func (d Deps) subsRegisterHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "Invalid proxy token")
 		return
 	}
-	body, maxed, err := readBounded(io.LimitReader(r.Body, maxSubsRegisterBytes+1))
-	if err != nil || maxed || len(body) > maxSubsRegisterBytes {
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxSubsRegisterBytes+1))
+	if err != nil || len(body) > maxSubsRegisterBytes {
 		writeError(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
@@ -125,7 +125,7 @@ func (d Deps) subsRegisterHandler(w http.ResponseWriter, r *http.Request) {
 // playlist, not a bare .vtt, as the rendition URI).
 //
 //	GET /api/subtitles/wrap.m3u8?src=/api/subtitles/opensubtitles/download?url=<url>
-func (d Deps) subsWrapHandler(w http.ResponseWriter, r *http.Request) {
+func (d *Deps) subsWrapHandler(w http.ResponseWriter, r *http.Request) {
 	if !corsGate(w, r, "GET", true) {
 		return
 	}

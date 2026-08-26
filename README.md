@@ -41,8 +41,7 @@ players alike.
 
 3. Open http://localhost:8080
 
-The listen address is fixed at `:8080`. Any config value can be overridden by
-an environment variable of the same name.
+The default listen address is `:8080` (configurable via `LISTEN_ADDR`). Any config value can be overridden by an environment variable of the same name.
 
 ## Configuration
 
@@ -51,13 +50,15 @@ parsed leniently — an invalid value falls back to the default.
 
 | Key | Default | Description |
 |-----|---------|-------------|
+| `LISTEN_ADDR` | `:8080` | TCP address the HTTP server binds to |
 | `TMDB_API_KEY` / `TMDB_ACCESS_TOKEN` | — | TMDB credentials; Bearer token preferred when both set |
 | `BROWSER_HEADLESS` | `true` | Run the fallback scraper without a visible window |
 | `BROWSER_TIMEOUT` | `45s` | Per-attempt timeout for browser-based resolution |
 | `MAX_BROWSER_SESSIONS` | `3` | Cap on concurrent headless-Chrome sessions |
+| `MAX_SESSIONS` | `200` | Cap on concurrent active proxy/playback sessions |
 | `BROWSER_EXECUTABLE` | auto-detect | Path to a specific Chrome/Chromium binary |
-| `CACHE_MAX_MB` | `256` | RAM cap for the manifest/segment body cache |
-| `VIXSRC_ORIGIN` / `VIDKING_ORIGIN` / `VIDLOVE_ORIGIN` | provider URLs | Override media source origins |
+| `CACHE_MAX_MB` | `512` | RAM cap for the manifest/segment body cache |
+| `VIXSRC_ORIGIN` / `VIDKING_ORIGIN` / `VIDLOVE_ORIGIN` / `VIDSRCME_ORIGIN` / `VIDSRCME_DATA_ORIGIN` | provider URLs | Override media source origins |
 
 ## Smart-TV playback
 
@@ -73,6 +74,7 @@ get a synthesized one so there is always somewhere to declare the group.
 
 ```
 main.go                     wiring only: config → resolver → client/store → HTTP server
+debug/                      unit test suites (manifest, resolver, server, subtitles)
 internal/config/            config.conf parsing (+ env overrides), defaults
 internal/catalog/           TMDB client, movie/TV mapping, cache stores
 internal/server/            route table, method/CORS gates, gzip, handlers
@@ -84,6 +86,7 @@ internal/mediaresolver/     the media pipeline:
     proxy.go                  the streaming reverse-proxy endpoint
     manifest.go               manifest rewriting + subtitle rendition embedding
     session.go / cache.go / warmer.go   proxy state, body LRU, read-ahead
+    bandwidth_test.go         live upstream bandwidth benchmark
 static/js/                  vanilla ES modules: main.js (orchestrator),
                             storage.js (My List / progress), utils.js
 ```
@@ -127,29 +130,56 @@ static/js/                  vanilla ES modules: main.js (orchestrator),
 
   Verify with `sysctl net.ipv4.tcp_congestion_control` — it should print
   `bbr`.
-- **Port already in use** — the listen address is hard-coded to `:8080`.
+- **Port already in use** — set `LISTEN_ADDR` in `config.conf` or pass the `LISTEN_ADDR` environment variable (e.g. `LISTEN_ADDR=:8081`).
 
-## Bandwidth Testing
+## Testing & Debugging
 
-GoFlix includes a standalone bandwidth tester to evaluate its upstream media servers. You can run it with the standard Go test tool:
+All unit tests are located in the `debug/` directory, while live upstream bandwidth benchmarks are kept in `internal/mediaresolver/bandwidth_test.go`.
+
+### Running Unit Tests
+
+Run all unit tests in the `debug` suite:
+
+```bash
+go test ./debug/... -v
+```
+
+Or run all tests across the repository:
+
+```bash
+go test ./... -v
+```
+
+Test suites included in `debug/`:
+- **Manifest Tests** (`debug/manifest_test.go`): Master manifest rewriting, highest quality ordering, and subtitle rendition injection.
+- **Resolver Tests** (`debug/resolver_test.go`): HTTP byte-range parsing, SSRF/IP blocking, query string redaction, and candidate scoring.
+- **Server Tests** (`debug/server_test.go`): Subtitle download endpoint SSRF protection and `/api/health` status checks.
+- **Subtitle Tests** (`debug/subtitles_test.go`): SRT to WebVTT conversion, UTF-8 BOM/CRLF stripping, timestamp parsing, and duplicate cue removal.
+
+### Upstream Bandwidth Testing
+
+GoFlix includes a standalone bandwidth tester in `internal/mediaresolver/bandwidth_test.go` to benchmark upstream media servers. It measures the resolve time, TCP ping, TTFB, and download bandwidth (Mbps) for each provider server:
 
 ```bash
 go test -v -run TestBandwidth ./internal/mediaresolver -timeout 20m
 ```
 
 Optional environment variables for customizing the test:
-- `BW_PROVIDERS` — test a comma-separated subset (e.g., `vixsrc,vidking,vidlove`)
+- `BW_PROVIDERS` — test a comma-separated subset (e.g., `vixsrc,vidking,vidlove,vidsrcme`)
 - `BW_TYPE` — test a specific media type (`movie` or `tv`)
-- `BW_ID` — test a specific TMDB ID (default is 27205 for Inception)
+- `BW_ID` — test a specific TMDB ID (default is `27205` for Inception)
 - `BW_SEASON` and `BW_EPISODE` — test specific TV show episodes
 
 Example testing a specific TV show episode on a subset of providers:
 
 ```bash
-BW_PROVIDERS=vidking,vidlove BW_TYPE=tv BW_ID=1399 BW_SEASON=1 BW_EPISODE=1 go test -v -run TestBandwidth ./internal/mediaresolver -timeout 20m
+BW_PROVIDERS=vidking,vidlove,vidsrcme BW_TYPE=tv BW_ID=1399 BW_SEASON=1 BW_EPISODE=1 go test -v -run TestBandwidth ./internal/mediaresolver -timeout 20m
 ```
 
-> **Note:** Go caches successful test results. If your test finishes instantly with `(cached)`, add the `-count=1` flag to force a fresh run (e.g., `go test -count=1 -v ...`), or run `go clean -testcache` to clear the cache globally.
+
+> **Note:** Go caches successful test results. Add `-count=1` to force a fresh run (e.g., `go test -count=1 -v ...`), or run `go clean -testcache` to clear the cache globally.
+
+
 
 ## Notes
 
