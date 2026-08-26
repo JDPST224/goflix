@@ -35,8 +35,8 @@ type hlsCandidate struct {
 }
 
 type Config struct {
-	TargetOrigin, VidKingOrigin, VidLoveOrigin string
-	BrowserHeadless                            bool
+	TargetOrigin, VidKingOrigin, VidLoveOrigin, VidsrcmeOrigin, VidsrcmeDataOrigin string
+	BrowserHeadless                                                                bool
 	BrowserTimeout, SourceResolutionTimeout    time.Duration
 	MaxBrowserSessions                         int
 	BrowserExecutable                          string
@@ -165,10 +165,22 @@ func New(cfg Config) (*Resolver, error) {
 	if cfg.VidLoveOrigin == "" {
 		cfg.VidLoveOrigin = "https://player.vidlove.cc"
 	}
+	if cfg.VidsrcmeOrigin == "" {
+		cfg.VidsrcmeOrigin = "https://vidsrcme.ru"
+	}
+	if cfg.VidsrcmeDataOrigin == "" {
+		cfg.VidsrcmeDataOrigin = "https://data.vidsrcme.ru"
+	}
 	cfg.TargetOrigin = strings.TrimRight(cfg.TargetOrigin, "/")
 	cfg.VidKingOrigin = strings.TrimRight(cfg.VidKingOrigin, "/")
 	cfg.VidLoveOrigin = strings.TrimRight(cfg.VidLoveOrigin, "/")
-	for k, v := range map[string]string{"VIXSRC_ORIGIN": cfg.TargetOrigin, "VIDKING_ORIGIN": cfg.VidKingOrigin, "VIDLOVE_ORIGIN": cfg.VidLoveOrigin} {
+	cfg.VidsrcmeOrigin = strings.TrimRight(cfg.VidsrcmeOrigin, "/")
+	cfg.VidsrcmeDataOrigin = strings.TrimRight(cfg.VidsrcmeDataOrigin, "/")
+	for k, v := range map[string]string{
+		"VIXSRC_ORIGIN": cfg.TargetOrigin, "VIDKING_ORIGIN": cfg.VidKingOrigin,
+		"VIDLOVE_ORIGIN": cfg.VidLoveOrigin, "VIDSRCME_ORIGIN": cfg.VidsrcmeOrigin,
+		"VIDSRCME_DATA_ORIGIN": cfg.VidsrcmeDataOrigin,
+	} {
 		u, e := url.Parse(v)
 		if e != nil || u.Scheme != "https" || u.Host == "" {
 			return nil, fmt.Errorf("%s must be an HTTPS origin", k)
@@ -319,6 +331,10 @@ func (r *Resolver) Resolve(parent context.Context, req MediaRequest) (string, er
 		if proxyURL, ok := r.tryVidloveDirect(parent, req); ok {
 			return proxyURL, nil
 		}
+	case "vidsrcme", "vidsrc":
+		if proxyURL, ok := r.tryVidsrcmeDirect(parent, req); ok {
+			return proxyURL, nil
+		}
 	}
 	// A fresh browser run (and proxy session) is created for every Resolve
 	// call; cached browser contexts cannot be reused safely across calls.
@@ -378,6 +394,8 @@ func (r *Resolver) targetURL(req MediaRequest) (string, error) {
 		origin = r.cfg.VidKingOrigin
 	} else if strings.EqualFold(strings.TrimSpace(req.Provider), "vidlove") {
 		origin = r.cfg.VidLoveOrigin
+	} else if strings.EqualFold(strings.TrimSpace(req.Provider), "vidsrcme") || strings.EqualFold(strings.TrimSpace(req.Provider), "vidsrc") {
+		origin = r.cfg.VidsrcmeOrigin
 	}
 	base, err := url.Parse(origin)
 	if err != nil {
@@ -397,6 +415,12 @@ func (r *Resolver) targetURL(req MediaRequest) (string, error) {
 			p = "/embed/movie/" + req.ID
 		} else {
 			p = "/embed/tv/" + req.ID + "/" + req.Season + "/" + req.Episode
+		}
+	} else if strings.EqualFold(strings.TrimSpace(req.Provider), "vidsrcme") || strings.EqualFold(strings.TrimSpace(req.Provider), "vidsrc") {
+		if req.Type == Movie {
+			p = "/embed/movie?tmdb=" + req.ID
+		} else {
+			p = "/embed/tv?tmdb=" + req.ID + "&season=" + req.Season + "&episode=" + req.Episode
 		}
 	}
 	u, err := base.Parse(p)
@@ -423,7 +447,7 @@ func validateRequest(r MediaRequest) error {
 		return errors.New("unsupported media type")
 	}
 	switch strings.ToLower(strings.TrimSpace(r.Provider)) {
-	case "", "vixsrc", "vidking", "vidlove":
+	case "", "vixsrc", "vidking", "vidlove", "vidsrcme", "vidsrc":
 		return nil
 	default:
 		return errors.New("unsupported provider")

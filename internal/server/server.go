@@ -35,7 +35,7 @@ func New(d Deps) http.Handler {
 	mux.HandleFunc("/api/episodes", d.episodesHandler)
 	// Media source resolver routes. VixSrc also keeps its legacy unprefixed
 	// routes below for backwards compatibility.
-	for _, provider := range []string{"vixsrc", "vidking", "vidlove"} {
+	for _, provider := range []string{"vixsrc", "vidking", "vidlove", "vidsrcme"} {
 		moviePrefix := "/api/media/source/" + provider + "/movie/"
 		tvPrefix := "/api/media/source/" + provider + "/tv/"
 		mux.HandleFunc(moviePrefix, d.makeMovieSourceHandler(moviePrefix, provider))
@@ -51,8 +51,10 @@ func New(d Deps) http.Handler {
 	mux.HandleFunc("/api/subtitles/wrap.vtt", d.subtitlesWrapVTTHandler)
 	mux.HandleFunc("/api/subtitles/vidking", d.subtitlesVidkingHandler)
 	mux.HandleFunc("/api/subtitles/vidlove", d.subtitlesVidloveHandler)
-	mux.HandleFunc("/api/subtitles/videasy/download/", d.subtitlesVideasyDownloadHandler)
+	mux.HandleFunc("/api/subtitles/vidsrcme", d.subtitlesVidsrcmeHandler)
+	mux.HandleFunc("/api/subtitles/opensubtitles/download", d.subtitlesOpenSubtitlesDownloadHandler)
 	mux.HandleFunc("/api/subtitles/vidlove/download", d.subtitlesVidloveDownloadHandler)
+	mux.HandleFunc("/api/subtitles/vidsrcme/download", d.subtitlesVidsrcmeDownloadHandler)
 	mux.Handle("/", staticFileServer("./static"))
 	return mux
 }

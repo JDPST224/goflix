@@ -187,7 +187,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let playerReady          = false;
     let playerAudioTracks    = [];
     let playerSubtitleTracks = [];
-    let externalSubtitleTracks = []; // Subtitles fetched from Videasy/Vidlove via the backend
+    let externalSubtitleTracks = []; // Subtitles fetched from OpenSubtitles/Vidlove via the backend
     let playerAudioInitialized = false;
     let playerSubtitlesForcedOff = false; // user's last explicit subtitle choice was "Off"
     let activeExternalSubtitleIdx = -1;   // External track the player intends to render
@@ -2318,7 +2318,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // deduplicating by language/label.
     async function fetchExternalSubtitles(movie, season, episode, provider) {
         if (!movie || !movie.id) return [];
-        const supportedProviders = ['vidking', 'vidlove'];
+        const supportedProviders = ['vidking', 'vidlove', 'vidsrcme'];
         if (!supportedProviders.includes(provider)) {
             return [];
         }
@@ -2846,7 +2846,7 @@ document.addEventListener('DOMContentLoaded', () => {
         restoreSavedVolume();
         vixPlayer.style.display = 'block';
 
-        const provider = server === 'vidking' ? 'vidking' : (server === 'vidlove' ? 'vidlove' : 'vixsrc');
+        const provider = server === 'vidking' ? 'vidking' : (server === 'vidlove' ? 'vidlove' : (server === 'vidsrcme' ? 'vidsrcme' : 'vixsrc'));
 
         // Fire External subtitle fetch in parallel with HLS source resolution for the selected provider
         let externalPromise = fetchExternalSubtitles(movie, currentPlayerSeason, currentPlayerEpisode, provider);

@@ -15,7 +15,7 @@ players alike.
 - **Streaming proxy** — token-authenticated reverse proxy with an in-memory
   segment cache and read-ahead warming: playback starts from RAM instead of
   waiting on cold upstream fetches. Range requests supported for instant seeks.
-- **Subtitles everywhere** — search across Videasy/Vidlove with SRT→WebVTT
+- **Subtitles everywhere** — search across OpenSubtitles/Vidlove with SRT→WebVTT
   conversion, and server-side embedding into the HLS master manifest so
   smart-TV native players (which ignore `<track>` elements) get selectable
   subtitle languages too.
@@ -76,10 +76,10 @@ main.go                     wiring only: config → resolver → client/store �
 internal/config/            config.conf parsing (+ env overrides), defaults
 internal/catalog/           TMDB client, movie/TV mapping, cache stores
 internal/server/            route table, method/CORS gates, gzip, handlers
-internal/subtitles/         Videasy/Vidlove search clients, SRT→WebVTT converter
+internal/subtitles/         OpenSubtitles/Vidlove search clients, SRT→WebVTT converter
 internal/mediaresolver/     the media pipeline:
     resolver.go               Resolve() orchestration, sessions, config
-    vidking/vidlove/vixsrc.go per-provider direct resolvers
+    vidking/vidlove/vidsrcme/vixsrc.go per-provider direct resolvers
     browser.go                headless-Chrome fallback scrape
     proxy.go                  the streaming reverse-proxy endpoint
     manifest.go               manifest rewriting + subtitle rendition embedding
@@ -93,15 +93,16 @@ static/js/                  vanilla ES modules: main.js (orchestrator),
 - `GET /api/home|movies|tvshows|popular` — gzipped catalog JSON
 - `GET /api/search?q=&type=` · `/api/detail?type=&id=` · `/api/episodes?id=&season=`
 - `GET /api/media/source/<provider>/movie/<tmdbId>` and `/tv/<id>/<s>/<e>`
-  (`provider` ∈ vixsrc | vidking | vidlove); legacy unprefixed routes map
+  (`provider` ∈ vixsrc | vidking | vidlove | vidsrcme); legacy unprefixed routes map
   to VixSrc
 - `GET /api/media/proxy/<token>.m3u8?url=...` — HLS proxy (supports Range)
 - `POST /api/media/subs/<token>` — register extra subtitle renditions on a
   live session; the resolver embeds its own ladder automatically for
-  vidking/vidlove, this tops it up
-- `GET /api/subtitles/vidking|vidlove?type=&id=&season=&episode=` — search
-- `GET /api/subtitles/videasy/download/<id>` ·
-  `GET /api/subtitles/vidlove/download?url=` — WebVTT download/convert
+  vidking/vidlove/vidsrcme, this tops it up
+- `GET /api/subtitles/vidking|vidlove|vidsrcme?type=&id=&season=&episode=` — search
+- `GET /api/subtitles/opensubtitles/download?url=` ·
+  `GET /api/subtitles/vidlove/download?url=` ·
+  `GET /api/subtitles/vidsrcme/download?url=` — WebVTT download/convert
 - `GET /api/subtitles/wrap.m3u8?src=...` — single-segment playlist wrapping a
   local subtitle endpoint (rendition target for native players)
 

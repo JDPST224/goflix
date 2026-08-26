@@ -49,8 +49,11 @@ func validLocalSubtitleWrapSrc(p string) bool {
 	if u.Path == "/api/subtitles/vidlove/download" {
 		return true
 	}
-	if strings.HasPrefix(u.Path, "/api/subtitles/videasy/download/") {
-		return strings.TrimSpace(strings.TrimPrefix(u.Path, "/api/subtitles/videasy/download/")) != ""
+	if u.Path == "/api/subtitles/vidsrcme/download" {
+		return true
+	}
+	if u.Path == "/api/subtitles/opensubtitles/download" {
+		return true
 	}
 	return false
 }
@@ -121,7 +124,7 @@ func (d Deps) subsRegisterHandler(w http.ResponseWriter, r *http.Request) {
 // TYPE=SUBTITLES renditions by native players (which require a media
 // playlist, not a bare .vtt, as the rendition URI).
 //
-//	GET /api/subtitles/wrap.m3u8?src=/api/subtitles/videasy/download/<id>
+//	GET /api/subtitles/wrap.m3u8?src=/api/subtitles/opensubtitles/download?url=<url>
 func (d Deps) subsWrapHandler(w http.ResponseWriter, r *http.Request) {
 	if !corsGate(w, r, "GET", true) {
 		return
@@ -225,16 +228,21 @@ func FetchSubRenditions(ctx context.Context, client *catalog.Client, req mediare
 		querySeason, queryEpisode = req.Season, req.Episode
 	}
 
-	subs := subtitles.FetchVideasySubtitles(ctx, id, querySeason, queryEpisode)
-	if len(subs) == 0 && req.Provider == "vidlove" {
+	var subs []subtitles.FrontendSubtitle
+
+	if req.Provider == "vidsrcme" {
+		subs = subtitles.FetchVidsrcmeSubtitles(ctx, mediaType, id, req.Season, req.Episode)
+	} else if req.Provider == "vidlove" {
 		subs = subtitles.FetchVidloveSubtitles(ctx, mediaType, id, req.Season, req.Episode)
 	}
+
 	if len(subs) == 0 && client.HasCredentials() {
 		if imdbID, err := client.ExternalID(mediaType, id, req.Season, req.Episode); err == nil && imdbID != "" {
-			subs = subtitles.FetchVideasySubtitles(ctx, imdbID, querySeason, queryEpisode)
+			subs = subtitles.FetchOpenSubtitles(ctx, imdbID, querySeason, queryEpisode)
 		}
 	}
-	if len(subs) == 0 {
+
+	if len(subs) == 0 && req.Provider != "vidlove" && req.Provider != "vidsrcme" {
 		subs = subtitles.FetchVidloveSubtitles(ctx, mediaType, id, req.Season, req.Episode)
 	}
 	return renditionsFromSubtitles(subs)

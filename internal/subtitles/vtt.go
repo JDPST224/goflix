@@ -1,4 +1,4 @@
-// Package subtitle implements subtitle discovery (Videasy, Vidlove) and the
+// Package subtitles implements subtitle discovery (OpenSubtitles, Vidlove) and the
 // SRT→WebVTT conversion served to the browser's <track> elements.
 package subtitles
 
@@ -153,16 +153,4 @@ func SrtToWebVTT(srt string) string {
 	return out.String()
 }
 
-// ValidSubtitleID checks that a Videasy subtitle ID contains only safe
-// characters (alphanumeric, hyphens, underscores) and is a reasonable length.
-func ValidSubtitleID(s string) bool {
-	if s == "" || len(s) > 128 {
-		return false
-	}
-	for _, c := range s {
-		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '-' || c == '_') {
-			return false
-		}
-	}
-	return true
-}
+

@@ -1,8 +1,9 @@
 package server
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
-	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -15,7 +16,7 @@ import (
 )
 
 // subtitlesVidkingHandler resolves subtitles for the VidKing server.
-// It searches Videasy using TMDB ID directly, with automatic multi-query and cross-provider fallback.
+// It searches OpenSubtitles using TMDB ID directly, with automatic multi-query and cross-provider fallback.
 func (d Deps) subtitlesVidkingHandler(w http.ResponseWriter, r *http.Request) {
 	if !corsGate(w, r, "GET", false) {
 		return
@@ -49,17 +50,16 @@ func (d Deps) subtitlesVidkingHandler(w http.ResponseWriter, r *http.Request) {
 		querySeason, queryEpisode = season, episode
 	}
 
-	// 1. Try Videasy with TMDB ID
-	subs := subtitles.FetchVideasySubtitles(ctx, id, querySeason, queryEpisode)
+	var subs []subtitles.FrontendSubtitle
 
-	// 2. If still empty, try IMDb ID lookup as fallback
-	if len(subs) == 0 && d.Client.HasCredentials() {
+	// 1. OpenSubtitles needs an IMDb ID. If we have credentials, resolve it and fetch.
+	if d.Client.HasCredentials() {
 		if imdbID, err := d.Client.ExternalID(mediaType, id, season, episode); err == nil && imdbID != "" {
-			subs = subtitles.FetchVideasySubtitles(ctx, imdbID, querySeason, queryEpisode)
+			subs = subtitles.FetchOpenSubtitles(ctx, imdbID, querySeason, queryEpisode)
 		}
 	}
 
-	// 3. If still empty, fallback to Vidlove API
+	// 2. If still empty, fallback to Vidlove API
 	if len(subs) == 0 {
 		subs = subtitles.FetchVidloveSubtitles(ctx, mediaType, id, season, episode)
 	}
@@ -71,7 +71,7 @@ func (d Deps) subtitlesVidkingHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"success": true, "subtitles": subs})
 }
 
-// subtitlesVidloveHandler resolves subtitles for the Vidlove server with Videasy fallback.
+// subtitlesVidloveHandler resolves subtitles for the Vidlove server with OpenSubtitles fallback.
 //
 //	GET /api/subtitles/vidlove?type=movie&id=<tmdbId>
 //	GET /api/subtitles/vidlove?type=tv&id=<tmdbId>&season=<S>&episode=<E>
@@ -94,16 +94,18 @@ func (d Deps) subtitlesVidloveHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Bound the two-provider fallback ladder: Vidlove + Videasy each carry
+	// Bound the two-provider fallback ladder: Vidlove + OpenSubtitles each carry
 	// their own 10s client timeout; without an aggregate cap a slow pair
 	// could stall this request for up to 20s.
 	ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
 	defer cancel()
 
 	subs := subtitles.FetchVidloveSubtitles(ctx, mediaType, id, season, episode)
-	if len(subs) == 0 {
-		// Fallback to Videasy
-		subs = subtitles.FetchVideasySubtitles(ctx, id, season, episode)
+	if len(subs) == 0 && d.Client.HasCredentials() {
+		// Fallback to OpenSubtitles using IMDb ID
+		if imdbID, err := d.Client.ExternalID(mediaType, id, season, episode); err == nil && imdbID != "" {
+			subs = subtitles.FetchOpenSubtitles(ctx, imdbID, season, episode)
+		}
 	}
 
 	if subs == nil {
@@ -113,23 +115,65 @@ func (d Deps) subtitlesVidloveHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"success": true, "subtitles": subs})
 }
 
-// subtitlesVideasyDownloadHandler proxies a subtitle download from Videasy and
-// converts SRT to WebVTT so the browser can use it as a native track source.
+// subtitlesVidsrcmeHandler resolves subtitles for the VidSrcMe server with OpenSubtitles fallback.
 //
-//	GET /api/subtitles/videasy/download/<subtitle-id>
-func (d Deps) subtitlesVideasyDownloadHandler(w http.ResponseWriter, r *http.Request) {
+//	GET /api/subtitles/vidsrcme?type=movie&id=<tmdbId>
+//	GET /api/subtitles/vidsrcme?type=tv&id=<tmdbId>&season=<S>&episode=<E>
+func (d Deps) subtitlesVidsrcmeHandler(w http.ResponseWriter, r *http.Request) {
 	if !corsGate(w, r, "GET", false) {
 		return
 	}
 
-	subtitleID := strings.TrimPrefix(r.URL.Path, "/api/subtitles/videasy/download/")
-	subtitleID = strings.Trim(subtitleID, "/")
-	if !subtitles.ValidSubtitleID(subtitleID) {
-		writeError(w, http.StatusBadRequest, "Invalid subtitle ID")
+	mediaType := strings.TrimSpace(r.URL.Query().Get("type"))
+	id := strings.TrimSpace(r.URL.Query().Get("id"))
+	season := strings.TrimSpace(r.URL.Query().Get("season"))
+	episode := strings.TrimSpace(r.URL.Query().Get("episode"))
+
+	if !ValidMediaID(id) || (mediaType != "movie" && mediaType != "tv") {
+		writeError(w, http.StatusBadRequest, "Invalid request parameters")
+		return
+	}
+	if mediaType == "tv" && (!ValidMediaID(season) || !ValidMediaID(episode)) {
+		writeError(w, http.StatusBadRequest, "season and episode are required for TV")
 		return
 	}
 
-	content, status, msg := d.fetchVideasySubtitleVTT(r.Context(), subtitleID)
+	ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
+	defer cancel()
+
+	subs, imdbID := subtitles.FetchVidsrcmeSubtitlesWithIMDb(ctx, mediaType, id, season, episode)
+	if len(subs) == 0 {
+		if imdbID == "" && d.Client.HasCredentials() {
+			imdbID, _ = d.Client.ExternalID(mediaType, id, season, episode)
+		}
+		if imdbID != "" {
+			subs = subtitles.FetchOpenSubtitles(ctx, imdbID, season, episode)
+		}
+	}
+
+	if subs == nil {
+		subs = []subtitles.FrontendSubtitle{}
+	}
+	log.Printf("[Subtitles] VidSrcMe returned %d subtitles for id=%s", len(subs), id)
+	writeJSON(w, http.StatusOK, map[string]any{"success": true, "subtitles": subs})
+}
+
+// subtitlesOpenSubtitlesDownloadHandler proxies a subtitle download from OpenSubtitles and
+// converts SRT to WebVTT so the browser can use it as a native track source.
+//
+//	GET /api/subtitles/opensubtitles/download?url=<encoded-file-url>
+func (d Deps) subtitlesOpenSubtitlesDownloadHandler(w http.ResponseWriter, r *http.Request) {
+	if !corsGate(w, r, "GET", false) {
+		return
+	}
+
+	targetURL := strings.TrimSpace(r.URL.Query().Get("url"))
+	if targetURL == "" {
+		writeError(w, http.StatusBadRequest, "Invalid request parameters")
+		return
+	}
+
+	content, status, msg := d.fetchOpenSubtitlesSubtitleVTT(r.Context(), targetURL)
 	if status != http.StatusOK {
 		writeError(w, status, msg)
 		return
@@ -160,38 +204,56 @@ func readBounded(r io.Reader) ([]byte, bool, error) {
 	return body, false, nil
 }
 
-// fetchVideasySubtitleVTT downloads a raw Videasy subtitle file and converts
-// it to WebVTT. Non-OK results carry the HTTP status and message the caller
-// should relay to the browser verbatim.
-func (d Deps) fetchVideasySubtitleVTT(ctx context.Context, subtitleID string) (string, int, string) {
-	downloadURL := fmt.Sprintf("https://subs.videasy.to/download?id=%s", url.QueryEscape(subtitleID))
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, downloadURL, nil)
+// fetchOpenSubtitlesSubtitleVTT downloads a raw OpenSubtitles subtitle file by its absolute
+// upstream URL and converts it to WebVTT.
+func (d Deps) fetchOpenSubtitlesSubtitleVTT(ctx context.Context, targetURL string) (string, int, string) {
+	u, err := url.Parse(targetURL)
+	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+		return "", http.StatusBadRequest, "Invalid subtitle URL"
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, targetURL, nil)
 	if err != nil {
 		return "", http.StatusBadGateway, "Subtitle download failed"
 	}
-	req.Header.Set("Accept", "*/*")
 	req.Header.Set("User-Agent", subtitleUpstreamUA)
 
 	res, err := subtitles.Client.Do(req)
 	if err != nil {
-		log.Printf("[Subtitles] Videasy download error id=%s: %v", subtitleID, err)
+		log.Printf("[Subtitles] OpenSubtitles download error %s://%s%s: %v", u.Scheme, u.Host, u.Path, err)
 		return "", http.StatusBadGateway, "Subtitle download failed"
 	}
 	defer res.Body.Close()
 	if res.StatusCode != http.StatusOK {
-		log.Printf("[Subtitles] Videasy download id=%s: upstream status %d", subtitleID, res.StatusCode)
+		log.Printf("[Subtitles] OpenSubtitles download %s://%s%s: upstream status %d", u.Scheme, u.Host, u.Path, res.StatusCode)
 		return "", http.StatusBadGateway, "Subtitle not found"
 	}
 
 	body, maxed, err := readBounded(res.Body)
 	if err != nil {
-		log.Printf("[Subtitles] Videasy download read error id=%s: %v", subtitleID, err)
+		log.Printf("[Subtitles] OpenSubtitles download read error %s://%s%s: %v", u.Scheme, u.Host, u.Path, err)
 		return "", http.StatusBadGateway, "Failed to read subtitle content"
 	}
 	if maxed {
-		log.Printf("[Subtitles] Videasy download id=%s exceeded %d bytes", subtitleID, maxSubtitleBytes)
+		log.Printf("[Subtitles] OpenSubtitles download %s://%s%s exceeded %d bytes", u.Scheme, u.Host, u.Path, maxSubtitleBytes)
 		return "", http.StatusBadGateway, "Subtitle file too large"
 	}
+
+	if len(body) > 2 && body[0] == 0x1f && body[1] == 0x8b {
+		gr, err := gzip.NewReader(bytes.NewReader(body))
+		if err != nil {
+			log.Printf("[Subtitles] OpenSubtitles gzip reader error: %v", err)
+			return "", http.StatusBadGateway, "Subtitle decompression failed"
+		}
+		unzipped, err := io.ReadAll(gr)
+		gr.Close()
+		if err != nil {
+			log.Printf("[Subtitles] OpenSubtitles gzip read error: %v", err)
+			return "", http.StatusBadGateway, "Subtitle decompression failed"
+		}
+		body = unzipped
+	}
+
 	return subtitles.SrtToWebVTT(string(body)), http.StatusOK, ""
 }
 
@@ -301,6 +363,78 @@ func (d Deps) subtitlesVidloveDownloadHandler(w http.ResponseWriter, r *http.Req
 	writeSubtitleVTT(w, content)
 }
 
+// fetchVidsrcmeSubtitleVTT downloads a raw VidSrcMe subtitle file and converts it to WebVTT.
+func (d Deps) fetchVidsrcmeSubtitleVTT(ctx context.Context, targetURL string) (string, int, string) {
+	u, err := url.Parse(targetURL)
+	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+		return "", http.StatusBadRequest, "Invalid subtitle URL"
+	}
+
+	host := strings.ToLower(u.Hostname())
+	allowedHost := false
+	for _, dom := range []string{"vidapi.cloud", "vidsrcme.ru", "vidsrcme.xyz", "cloudorchestranova.com"} {
+		if host == dom || strings.HasSuffix(host, "."+dom) {
+			allowedHost = true
+			break
+		}
+	}
+	if !allowedHost {
+		return "", http.StatusBadRequest, "Invalid subtitle URL"
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, targetURL, nil)
+	if err != nil {
+		return "", http.StatusBadGateway, "Subtitle download failed"
+	}
+	req.Header.Set("Referer", "https://cloudorchestranova.com/")
+	req.Header.Set("User-Agent", subtitleUpstreamUA)
+
+	res, err := subtitles.Client.Do(req)
+	if err != nil {
+		log.Printf("[Subtitles] VidSrcMe download error %s://%s%s: %v", u.Scheme, u.Host, u.Path, err)
+		return "", http.StatusBadGateway, "Subtitle download failed"
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		log.Printf("[Subtitles] VidSrcMe download %s://%s%s: upstream status %d", u.Scheme, u.Host, u.Path, res.StatusCode)
+		return "", http.StatusBadGateway, "Subtitle not found"
+	}
+
+	body, maxed, err := readBounded(res.Body)
+	if err != nil {
+		log.Printf("[Subtitles] VidSrcMe download read error %s://%s%s: %v", u.Scheme, u.Host, u.Path, err)
+		return "", http.StatusBadGateway, "Failed to read subtitle content"
+	}
+	if maxed {
+		log.Printf("[Subtitles] VidSrcMe download %s://%s%s exceeded %d bytes", u.Scheme, u.Host, u.Path, maxSubtitleBytes)
+		return "", http.StatusBadGateway, "Subtitle file too large"
+	}
+	return subtitles.SrtToWebVTT(string(body)), http.StatusOK, ""
+}
+
+// subtitlesVidsrcmeDownloadHandler proxies a VidSrcMe subtitle download and
+// converts SRT to WebVTT so the browser can use it as a native track source.
+//
+//	GET /api/subtitles/vidsrcme/download?url=<encoded-file-url>
+func (d Deps) subtitlesVidsrcmeDownloadHandler(w http.ResponseWriter, r *http.Request) {
+	if !corsGate(w, r, "GET", false) {
+		return
+	}
+
+	targetURL := strings.TrimSpace(r.URL.Query().Get("url"))
+	if targetURL == "" {
+		writeError(w, http.StatusBadRequest, "Invalid request parameters")
+		return
+	}
+
+	content, status, msg := d.fetchVidsrcmeSubtitleVTT(r.Context(), targetURL)
+	if status != http.StatusOK {
+		writeError(w, status, msg)
+		return
+	}
+	writeSubtitleVTT(w, content)
+}
+
 // subtitlesWrapVTTHandler serves a local WebVTT endpoint's content with the
 // X-TIMESTAMP-MAP header injected. Native HLS players require that mapping to
 // align WebVTT cue timestamps against the MPEG-TS presentation timeline of
@@ -309,7 +443,7 @@ func (d Deps) subtitlesVidloveDownloadHandler(w http.ResponseWriter, r *http.Req
 // places cue-time zero at PTS 900000 — the conventional 10-second TS base —
 // so cues line up without any player-side offset math.
 //
-//	GET /api/subtitles/wrap.vtt?src=/api/subtitles/videasy/download/<id>[&pts=<uint>]
+//	GET /api/subtitles/wrap.vtt?src=/api/subtitles/opensubtitles/download?url=<url>[&pts=<uint>]
 func (d Deps) subtitlesWrapVTTHandler(w http.ResponseWriter, r *http.Request) {
 	if !corsGate(w, r, "GET", true) {
 		return
@@ -345,9 +479,20 @@ func (d Deps) subtitlesWrapVTTHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		content, status, msg = d.fetchVidloveSubtitleVTT(r.Context(), targetURL)
-	case strings.HasPrefix(u.Path, "/api/subtitles/videasy/download/"):
-		subtitleID := strings.Trim(strings.TrimPrefix(u.Path, "/api/subtitles/videasy/download/"), "/")
-		content, status, msg = d.fetchVideasySubtitleVTT(r.Context(), subtitleID)
+	case u.Path == "/api/subtitles/vidsrcme/download":
+		targetURL := u.Query().Get("url")
+		if targetURL == "" {
+			writeError(w, http.StatusBadRequest, "Invalid subtitle source")
+			return
+		}
+		content, status, msg = d.fetchVidsrcmeSubtitleVTT(r.Context(), targetURL)
+	case u.Path == "/api/subtitles/opensubtitles/download":
+		targetURL := u.Query().Get("url")
+		if targetURL == "" {
+			writeError(w, http.StatusBadRequest, "Invalid subtitle source")
+			return
+		}
+		content, status, msg = d.fetchOpenSubtitlesSubtitleVTT(r.Context(), targetURL)
 	default:
 		writeError(w, http.StatusBadRequest, "Invalid subtitle source")
 		return
