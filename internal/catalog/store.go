@@ -4,7 +4,9 @@
 package catalog
 
 import (
+	"fmt"
 	"log"
+	"sort"
 	"sync"
 	"time"
 )
@@ -29,6 +31,10 @@ type Store struct {
 	moviesRefM sync.Mutex // guards concurrent refreshes (TryLock)
 	tvRefM     sync.Mutex
 	popularRef sync.Mutex
+
+	providersMu  sync.RWMutex
+	providers    map[string][]Movie
+	providersRef sync.Mutex // guards concurrent refreshes (TryLock)
 }
 
 func NewStore(c *Client) *Store { return &Store{client: c} }
@@ -52,6 +58,14 @@ func (s *Store) Popular() []Movie {
 	s.popularMu.RLock()
 	defer s.popularMu.RUnlock()
 	return s.popular
+}
+
+// Providers returns the cached provider-keyed carousel map (nil when never
+// populated).
+func (s *Store) Providers() map[string][]Movie {
+	s.providersMu.RLock()
+	defer s.providersMu.RUnlock()
+	return s.providers
 }
 
 // Counts reports the three cache sizes for /api/health.
@@ -107,6 +121,12 @@ func (s *Store) RefreshMovies() {
 		{"/discover/movie?with_genres=878&language=en-US&page=1&sort_by=popularity.desc", []string{"Sci-Fi"}, "movie"},
 		{"/discover/movie?with_genres=10749&language=en-US&page=1&sort_by=popularity.desc", []string{"Romance"}, "movie"},
 		{"/discover/movie?with_genres=16&language=en-US&page=1&sort_by=popularity.desc", []string{"Animation"}, "movie"},
+		{"/discover/movie?with_genres=53&language=en-US&page=1&sort_by=popularity.desc", []string{"Thriller"}, "movie"},
+		{"/discover/movie?with_genres=80&language=en-US&page=1&sort_by=popularity.desc", []string{"Crime"}, "movie"},
+		{"/discover/movie?with_genres=18&language=en-US&page=1&sort_by=popularity.desc", []string{"Drama"}, "movie"},
+		{"/discover/movie?with_genres=14&language=en-US&page=1&sort_by=popularity.desc", []string{"Fantasy"}, "movie"},
+		{"/discover/movie?with_genres=12&language=en-US&page=1&sort_by=popularity.desc", []string{"Adventure"}, "movie"},
+		{"/discover/movie?with_genres=10751&language=en-US&page=1&sort_by=popularity.desc", []string{"Family"}, "movie"},
 	})
 
 	s.moviesMu.Lock()
@@ -139,6 +159,11 @@ func (s *Store) RefreshTVShows() {
 		{"/discover/tv?with_genres=9648&language=en-US&page=1&sort_by=popularity.desc", []string{"Mystery"}, "tv"},
 		{"/discover/tv?with_genres=10765&language=en-US&page=1&sort_by=popularity.desc", []string{"Sci-Fi & Fantasy"}, "tv"},
 		{"/discover/tv?with_genres=16&language=en-US&page=1&sort_by=popularity.desc", []string{"Anime"}, "tv"},
+		{"/discover/tv?with_genres=80&language=en-US&page=1&sort_by=popularity.desc", []string{"Crime Shows"}, "tv"},
+		{"/discover/tv?with_genres=10751&language=en-US&page=1&sort_by=popularity.desc", []string{"Family Shows"}, "tv"},
+		{"/discover/tv?with_genres=99&language=en-US&page=1&sort_by=popularity.desc", []string{"Documentary"}, "tv"},
+		{"/discover/tv?with_genres=10764&language=en-US&page=1&sort_by=popularity.desc", []string{"Reality"}, "tv"},
+		{"/discover/tv?with_genres=10762&language=en-US&page=1&sort_by=popularity.desc", []string{"Kids"}, "tv"},
 	})
 
 	s.tvMu.Lock()
@@ -177,6 +202,87 @@ func (s *Store) RefreshPopular() {
 	s.popularMu.Unlock()
 }
 
+// providerTable maps our carousel keys to TMDB watch-provider IDs (US
+// region). IDs verified against /watch/providers/movie?watch_region=US.
+var providerTable = []struct {
+	key   string
+	label string
+	id    int
+}{
+	{"netflix", "Netflix", 8},
+	{"prime", "Prime Video", 9},
+	{"max", "Max", 1899},
+	{"disney", "Disney+", 337},
+	{"apple", "Apple TV+", 350},
+	{"paramount", "Paramount+", 531},
+	{"hulu", "Hulu", 15},
+}
+
+// ProviderInfo resolves a provider key (netflix, prime, ...) to its TMDB
+// watch-provider ID (US region) and display label, for the paginated
+// /api/discover provider feed.
+func ProviderInfo(key string) (id int, label string, ok bool) {
+	for _, p := range providerTable {
+		if p.key == key {
+			return p.id, p.label, true
+		}
+	}
+	return 0, "", false
+}
+
+// RefreshProviders repopulates the per-provider "Only on …" carousel cache;
+// overlapping calls skip.
+func (s *Store) RefreshProviders() {
+	if !s.providersRef.TryLock() {
+		log.Println("Providers cache refresh already in progress; skipping overlapping refresh")
+		return
+	}
+	defer s.providersRef.Unlock()
+
+	log.Println("Refreshing providers cache...")
+	type result struct {
+		key   string
+		items []Movie
+	}
+	results := make([]result, len(providerTable))
+	var wg sync.WaitGroup
+	for i, p := range providerTable {
+		wg.Add(1)
+		go func(i int, p struct {
+			key   string
+			label string
+			id    int
+		}) {
+			defer wg.Done()
+			idStr := fmt.Sprintf("%d", p.id)
+			movieItems := s.client.List("/discover/movie?with_watch_providers="+idStr+"&watch_region=US&language=en-US&page=1&sort_by=popularity.desc", []string{p.label}, "movie")
+			tvItems := s.client.List("/discover/tv?with_watch_providers="+idStr+"&watch_region=US&language=en-US&page=1&sort_by=popularity.desc", []string{p.label}, "tv")
+			merged := InterleaveMovies(movieItems, tvItems)
+			if len(merged) > 20 {
+				merged = merged[:20]
+			}
+			results[i] = result{key: p.key, items: merged}
+		}(i, p)
+	}
+	wg.Wait()
+
+	next := map[string][]Movie{}
+	for _, r := range results {
+		if len(r.items) > 0 {
+			next[r.key] = r.items
+		}
+	}
+
+	s.providersMu.Lock()
+	if len(next) > 0 {
+		s.providers = next
+		log.Printf("Providers cache updated: %d providers\n", len(next))
+	} else {
+		log.Println("Warning: providers fetch returned 0 providers, keeping old cache")
+	}
+	s.providersMu.Unlock()
+}
+
 // homeRowOrder is the exact row interleave of /api/home: for each entry the
 // category tag and which cache it draws from.
 var homeRowOrder = []struct {
@@ -185,13 +291,14 @@ var homeRowOrder = []struct {
 }{
 	{"Trending Movies", "movie"},
 	{"Trending TV", "tv"},
+	{"Trending This Week", "popular"}, // special-cased: merges two popular tags, interleaved
 	{"Popular Movies", "movie"},
 	{"Popular Shows", "tv"},
-	{"Top Rated Movies", "movie"},
-	{"Top Rated Shows", "tv"},
-	{"Now Playing", "movie"},
-	{"Now Airing", "tv"},
+	{"Top Rated Movies", "movie"}, // special-cased: sorted by Rating desc
+	{"Top Rated Shows", "tv"},     // special-cased: sorted by Rating desc
 	{"Upcoming", "movie"},
+	{"New in Cinemas", "popular"},
+	{"New Episodes", "popular"},
 	{"Action", "movie"},
 	{"Action & Adventure", "tv"},
 	{"Comedy", "movie"},
@@ -225,6 +332,12 @@ func (s *Store) HomeView() []Movie {
 			tvBycat[c] = append(tvBycat[c], m)
 		}
 	}
+	popularBycat := map[string][]Movie{}
+	for _, m := range s.Popular() {
+		for _, c := range m.Categories {
+			popularBycat[c] = append(popularBycat[c], m)
+		}
+	}
 
 	// Cache tags do not always match the Home row labels.
 	if items, ok := moviesBycat["Trending Now"]; ok {
@@ -240,13 +353,26 @@ func (s *Store) HomeView() []Movie {
 	var combined []Movie
 	seen := map[string]bool{}
 	for _, o := range homeRowOrder {
-		var src map[string][]Movie
-		if o.src == "movie" {
-			src = moviesBycat
-		} else {
-			src = tvBycat
+		var rowItems []Movie
+		switch {
+		case o.cat == "Trending This Week":
+			rowItems = InterleaveMovies(popularBycat["Trending Movies"], popularBycat["Trending Shows"])
+		case o.src == "popular":
+			rowItems = popularBycat[o.cat]
+		case o.src == "movie":
+			rowItems = moviesBycat[o.cat]
+		default:
+			rowItems = tvBycat[o.cat]
 		}
-		for _, m := range src[o.cat] {
+		if o.cat == "Top Rated Movies" || o.cat == "Top Rated Shows" {
+			rowItems = append([]Movie(nil), rowItems...)
+			sort.SliceStable(rowItems, func(i, j int) bool { return rowItems[i].Rating > rowItems[j].Rating })
+		}
+		count := 0
+		for _, m := range rowItems {
+			if count >= 20 {
+				break
+			}
 			key := m.Type + "-" + m.ID
 			if seen[key] {
 				continue
@@ -255,18 +381,37 @@ func (s *Store) HomeView() []Movie {
 			// Re-label with the home category name
 			m.Categories = []string{o.cat}
 			combined = append(combined, m)
+			count++
 		}
 	}
 	return combined
 }
 
+// InterleaveMovies alternates items from a and b (a first), for rows that
+// mix two source lists (e.g. "Trending This Week" merges movie + TV pools,
+// and the provider discover feed merges one page of each).
+func InterleaveMovies(a, b []Movie) []Movie {
+	var out []Movie
+	for i := 0; i < len(a) || i < len(b); i++ {
+		if i < len(a) {
+			out = append(out, a[i])
+		}
+		if i < len(b) {
+			out = append(out, b[i])
+		}
+	}
+	return out
+}
+
 // StartRefreshLoop performs the initial parallel fetch and then refreshes all
 // three caches every 30 minutes. Call only when credentials are configured.
 func (s *Store) StartRefreshLoop() {
-	done := make(chan struct{}, 3)
+	done := make(chan struct{}, 4)
 	go func() { s.RefreshMovies(); done <- struct{}{} }()
 	go func() { s.RefreshTVShows(); done <- struct{}{} }()
 	go func() { s.RefreshPopular(); done <- struct{}{} }()
+	go func() { s.RefreshProviders(); done <- struct{}{} }()
+	<-done
 	<-done
 	<-done
 	<-done
@@ -278,6 +423,7 @@ func (s *Store) StartRefreshLoop() {
 			go s.RefreshMovies()
 			go s.RefreshTVShows()
 			go s.RefreshPopular()
+			go s.RefreshProviders()
 		}
 	}()
 }

@@ -27,6 +27,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const profileMenuAccount  = document.getElementById('profile-menu-account');
     const profileMenuSignout  = document.getElementById('profile-menu-signout');
     const carouselsContainer  = document.getElementById('carousels-container');
+    const genreFilterBar      = document.getElementById('genre-filter-bar');
     const mylistEmpty         = document.getElementById('mylist-empty');
     const mylistBrowseBtn     = document.getElementById('mylist-browse-btn');
     const pageLoader          = document.getElementById('page-loader');
@@ -107,12 +108,33 @@ document.addEventListener('DOMContentLoaded', () => {
     const detailCastSection   = document.getElementById('detail-cast-section');
     const detailCastRow       = document.getElementById('detail-cast-row');
     const detailEpisodesSection = document.getElementById('detail-episodes-section');
-    const detailSeasonSelect  = document.getElementById('detail-season-select');
+    const detailSeasonPicker  = document.getElementById('detail-season-picker');
+    const detailSeasonTrigger = document.getElementById('detail-season-trigger');
+    const detailSeasonCurrent = document.getElementById('detail-season-current');
+    const detailSeasonMenu    = document.getElementById('detail-season-menu');
     const detailEpSearch      = document.getElementById('detail-ep-search');
     const detailEpisodeList   = document.getElementById('detail-episode-list');
     const detailEpLoading     = document.getElementById('detail-ep-loading');
     const detailRelatedSection = document.getElementById('detail-related-section');
     const detailRelatedRow    = document.getElementById('detail-related-row');
+    const detailRelatedScrollLeft  = document.getElementById('detail-related-scroll-left');
+    const detailRelatedScrollRight = document.getElementById('detail-related-scroll-right');
+    if (detailRelatedScrollLeft && detailRelatedScrollRight && detailRelatedRow) {
+        detailRelatedScrollLeft.addEventListener('click', () => detailRelatedRow.scrollBy({ left: -600, behavior: 'smooth' }));
+        detailRelatedScrollRight.addEventListener('click', () => detailRelatedRow.scrollBy({ left: 600, behavior: 'smooth' }));
+    }
+
+    // Season picker trigger is static markup (unlike the provider/genre
+    // pickers, which are rebuilt per render), so its open/close toggle is
+    // wired once here; only the menu's option list gets rebuilt per show.
+    if (detailSeasonPicker && detailSeasonTrigger) {
+        detailSeasonTrigger.addEventListener('click', (e) => {
+            e.stopPropagation();
+            document.querySelectorAll('.provider-picker.open').forEach(p => { if (p !== detailSeasonPicker) p.classList.remove('open'); });
+            const open = detailSeasonPicker.classList.toggle('open');
+            detailSeasonTrigger.setAttribute('aria-expanded', String(open));
+        });
+    }
 
     // Search
     const searchToggle        = document.getElementById('search-toggle');
@@ -175,6 +197,49 @@ document.addEventListener('DOMContentLoaded', () => {
     let heroCrossfadeTimer = null;
     let scrubbing = false;           // user is dragging the seek bar — don't fight their preview
     let lastFocusedBeforeOverlay = null;
+    let allCatalogMovies = [];       // full unfiltered payload from the last catalog fetch
+    let activeGenre      = 'All';    // genre chip filter (Movies/TV Shows pages)
+    // Server pagination for the poster grids (genre chips on Movies/TV Shows,
+    // provider Explore-All on Home): once the cached matches are revealed,
+    // further batches come from /api/discover one page at a time. Nulled by
+    // renderCategoryRows on any rebuild (chip/page switch), which strands
+    // in-flight fetches via the identity checks below.
+    let gridFeed = null;            // { query, page, seen, done, inflight, dryRounds }
+    // True while the Home rows are replaced by an Explore-All grid (provider
+    // or genre); lets switchPage re-render Home when its nav entry is clicked
+    // again.
+    let homeGridActive = false;
+    // Home's per-genre rows (Action, Comedy, Horror, ...) are consolidated
+    // into one carousel with a dropdown instead of one row each.
+    const HOME_GENRE_ROWS = ['Action', 'Action & Adventure', 'Comedy', 'Comedy Shows', 'Horror',
+        'Sci-Fi', 'Sci-Fi & Fantasy', 'Drama', 'Mystery', 'Romance', 'Animation', 'Anime'];
+    let activeHomeGenre = 'Action';
+    const PROVIDERS = [
+        { key: 'netflix',   label: 'Netflix' },
+        { key: 'prime',     label: 'Prime Video' },
+        { key: 'max',       label: 'Max' },
+        { key: 'disney',    label: 'Disney+' },
+        { key: 'apple',     label: 'Apple TV+' },
+        { key: 'paramount', label: 'Paramount+' },
+        { key: 'hulu',      label: 'Hulu' },
+    ];
+    let providersData     = null;
+    let activeProvider     = 'netflix';
+    let providersRequestId = 0;
+    // Brand-ish colors + glyph for each provider's dropdown badge. Prime and
+    // Paramount get a small generic icon (play triangle / mountain peaks)
+    // instead of a bare letter so they're easier to tell apart at a glance;
+    // these are original shapes, not reproductions of the services' actual
+    // trademarked logos.
+    const PROVIDER_BADGES = {
+        netflix:   { text: '',   className: 'badge-netflix', icon: `<svg width="256px" height="256px" viewBox="0 0 256 256" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" preserveAspectRatio="xMidYMid"><defs><radialGradient cx="48.3397178%" cy="49.4186213%" fx="48.3397178%" fy="49.4186213%" r="70.4380887%" gradientTransform="translate(0.483397,0.494186),scale(1.000000,0.550875),translate(-0.483397,-0.494186)" id="radialGradient-1"><stop stop-color="#000000" offset="0%"></stop><stop stop-color="#000000" stop-opacity="0" offset="100%"></stop></radialGradient></defs><g><path d="M141.676338,41.2746569 L141.608906,79.6360396 L141.541118,117.997421 L138.385008,109.0921 C138.383912,109.089031 138.380021,109.077687 138.378943,109.074618 L134.30055,194.477217 C138.310388,205.800934 140.458766,211.845937 140.482897,211.870064 C140.51447,211.901649 142.799605,212.039499 145.561,212.176541 C153.927405,212.591702 164.29504,213.481319 172.159936,214.45853 C173.98096,214.684771 175.548152,214.800631 175.642501,214.716128 C175.736852,214.631624 175.788229,175.572658 175.756672,127.918505 L175.69923,41.2746569 L158.687784,41.2746569 L141.676338,41.2746569 Z" stroke="#000000" stroke-width="2.9562209" fill="#B1060F"></path><path d="M80.1382878,41.1604861 L80.1382878,127.892104 C80.1382878,175.594555 80.1849645,214.670743 80.242112,214.727902 C80.2992558,214.785042 83.2534257,214.50614 86.8069318,214.108168 C90.3604343,213.710178 95.2716247,213.215292 97.7205879,213.008561 C101.476527,212.691477 112.690651,211.970454 113.989212,211.962472 C114.366954,211.960097 114.391182,210.011234 114.445895,175.226595 L114.503693,138.493217 L117.217033,146.170131 C117.636362,147.356673 117.767894,147.727198 118.176424,148.883116 L122.253748,63.5015679 C121.389836,61.0590106 121.842711,62.3412234 120.852658,59.5419824 C117.521259,50.1228923 114.694332,42.1337874 114.570412,41.7884254 L114.344924,41.1604861 L97.2417849,41.1604861 L80.1382878,41.1604861 Z" stroke="#000000" stroke-width="2.9562209" fill="#B1060F"></path><path d="M80.1382787,41.1604861 L80.1382878,89.8454048 L114.434478,180.820963 C114.438058,178.736175 114.44215,177.609688 114.445895,175.226595 L114.503693,138.493217 L117.217033,146.170131 C132.320656,188.907688 140.435174,211.82235 140.482897,211.870064 C140.51447,211.901649 142.799605,212.039499 145.561,212.176541 C153.927405,212.591702 164.29504,213.481319 172.159936,214.45853 C173.98096,214.684771 175.548152,214.800631 175.642501,214.716128 C175.70735,214.658045 175.749683,195.506553 175.760954,168.489092 L141.625319,70.3489604 L141.608897,79.6360396 L141.541109,117.997421 L138.384999,109.0921 C135.301137,100.390624 133.24206,94.5714036 120.852649,59.5419824 C117.52125,50.1228923 114.694323,42.1337874 114.570403,41.7884254 L114.344915,41.1604861 L97.2417758,41.1604861 L80.1382787,41.1604861 Z" fill="url(#radialGradient-1)"></path><path d="M80.1390021,41.160477 L114.503693,138.537458 L114.503693,138.493217 L117.217033,146.170131 C132.320656,188.907688 140.435174,211.82235 140.482897,211.870064 C140.51447,211.901649 142.799605,212.039499 145.561,212.176541 C153.927405,212.591702 164.29504,213.481319 172.159936,214.45853 C173.971627,214.683611 175.530793,214.799226 175.639648,214.717197 L141.541118,117.979583 L141.541118,117.997412 L138.385008,109.092091 C135.301146,100.390615 133.242069,94.5713945 120.852658,59.5419732 C117.521259,50.1228832 114.694332,42.1337783 114.570412,41.7884163 L114.344924,41.160477 L97.2417849,41.160477 L80.1390021,41.160477 Z" fill="#E50914"></path></g></svg>` },
+        prime:     { text: '',   className: 'badge-prime', icon: `<svg width="24px" height="24px" viewBox="0 0 24 24" role="img" xmlns="http://www.w3.org/2000/svg"><title>Prime icon</title><path d="M22.787 15.292c-.336-.43-2.222-.204-3.069-.103-.257.031-.296-.193-.065-.356 1.504-1.056 3.968-.75 4.255-.397.288.357-.076 2.827-1.485 4.007-.217.18-.423.084-.327-.155.317-.792 1.027-2.566.69-2.996m-1.093 1.248c-2.627 1.94-6.437 2.97-9.717 2.97-4.597 0-8.737-1.7-11.87-4.528-.246-.222-.026-.525.27-.353 3.38 1.967 7.559 3.151 11.876 3.151a23.63 23.63 0 0 0 9.06-1.854c.444-.188.816.293.381.614m.482-5.038c-.761 0-1.346-.209-1.755-.626-.409-.418-.613-1.017-.613-1.797 0-.799.209-1.425.627-1.88.418-.454.998-.682 1.741-.682.572 0 1.019.138 1.341.415.323.276.484.645.484 1.105 0 .461-.174.81-.52 1.046-.348.237-.86.355-1.535.355-.35 0-.654-.034-.912-.101.037.411.161.706.373.884.212.178.533.268.963.268.172 0 .34-.011.502-.033a6.208 6.208 0 0 0 .733-.157.304.304 0 0 1 .046-.004c.104 0 .156.07.156.212v.424c0 .098-.013.167-.04.207a.341.341 0 0 1-.162.106 3.954 3.954 0 0 1-1.429.258m-.304-2.893c.314 0 .541-.048.682-.143.142-.095.212-.241.212-.438 0-.387-.23-.58-.69-.58-.59 0-.931.362-1.024 1.087.246.05.52.074.82.074m-9.84 2.755c-.08 0-.139-.018-.176-.055-.036-.037-.055-.096-.055-.175V6.886c0-.086.019-.146.055-.18.037-.034.096-.05.176-.05h.663c.141 0 .227.067.258.202l.074.249c.325-.215.619-.367.88-.456.26-.09.53-.134.806-.134.553 0 .943.197 1.17.59a3.77 3.77 0 0 1 .885-.452c.276-.092.562-.138.857-.138.43 0 .763.12 1 .36.236.239.354.574.354 1.004v3.253c0 .08-.017.138-.05.175-.034.037-.094.055-.18.055h-.885c-.08 0-.138-.018-.175-.055-.037-.037-.055-.096-.055-.175V8.176c0-.418-.188-.627-.562-.627-.332 0-.667.08-1.005.24v3.345c0 .08-.017.138-.05.175-.034.037-.094.055-.18.055h-.884c-.08 0-.139-.018-.176-.055-.036-.037-.055-.096-.055-.175V8.176c0-.418-.187-.627-.562-.627-.344 0-.682.083-1.013.249v3.336c0 .08-.017.138-.051.175-.034.037-.094.055-.18.055zM9.987 5.927c-.234 0-.42-.064-.562-.193-.142-.129-.212-.304-.212-.525 0-.221.07-.397.212-.526.141-.129.328-.193.562-.193.233 0 .42.064.562.193a.676.676 0 0 1 .212.526c0 .22-.07.396-.212.525-.141.129-.329.193-.562.193m-.443 5.437c-.08 0-.138-.019-.175-.055-.037-.037-.055-.096-.055-.176V6.886c0-.086.018-.146.055-.18.037-.034.096-.05.175-.05h.885c.086 0 .146.016.18.05s.05.094.05.18v4.247c0 .08-.017.139-.05.176-.034.036-.094.055-.18.055zm-3.681 0c-.08 0-.139-.018-.176-.055-.036-.037-.055-.096-.055-.175V6.886c0-.086.019-.146.055-.18.037-.034.096-.05.176-.05h.663c.141 0 .227.067.258.202l.12.497c.245-.27.477-.462.695-.575.219-.114.45-.17.696-.17h.13c.085 0 .147.016.183.05.037.034.056.094.056.18v.773c0 .08-.017.139-.051.176-.034.036-.094.055-.18.055a1.93 1.93 0 0 1-.166-.01 2.968 2.968 0 0 0-.258-.009c-.14 0-.313.02-.516.06-.202.04-.374.091-.515.152v3.097c0 .08-.018.138-.051.175-.034.037-.094.055-.18.055zM.344 13.262c-.08 0-.138-.017-.175-.05-.037-.034-.055-.095-.055-.18V6.886c0-.086.018-.146.055-.18.037-.034.095-.05.175-.05h.664c.14 0 .227.067.258.202l.064.24a2.03 2.03 0 0 1 .668-.424 2.13 2.13 0 0 1 .797-.157c.596 0 1.067.218 1.414.654.348.437.521 1.026.521 1.77 0 .51-.086.955-.258 1.336-.172.38-.405.674-.7.88a1.727 1.727 0 0 1-1.014.308c-.252 0-.491-.04-.719-.12a1.74 1.74 0 0 1-.58-.331v2.018c0 .085-.017.146-.05.18-.034.033-.095.05-.18.05zm2.018-2.81c.344 0 .597-.117.76-.35.163-.234.245-.603.245-1.106 0-.51-.08-.882-.24-1.115-.16-.234-.415-.35-.765-.35-.32 0-.62.083-.903.248v2.424c.27.166.571.249.903.249Z"/></svg>` },
+        max:       { text: '',   className: 'badge-max', icon: `<svg width="800px" height="800px" viewBox="0 0 192 192" xmlns="http://www.w3.org/2000/svg" id="Layer_1"><rect width="100%" height="100%" fill="#ffffff"/><defs><style>.cls-3,.cls-4{fill:none;stroke:#000000;stroke-linejoin:round}.cls-4{stroke-width:12px}.cls-3{stroke-width:8px}.cls-3,.cls-4{stroke-linecap:round}</style></defs><path d="M0 0h192v192H0z" style="fill:none"/><circle cx="137.82" cy="71.24" r="9.4"/><path d="M137.82 56.81c7.96 0 14.43 6.48 14.43 14.43s-6.48 14.43-14.43 14.43-14.43-6.48-14.43-14.43 6.48-14.43 14.43-14.43m0-12c-14.6 0-26.43 11.83-26.43 26.43s11.83 26.43 26.43 26.43 26.43-11.83 26.43-26.43-11.83-26.43-26.43-26.43Z"/><path d="M43.23 51.86v38.77m23.34-38.77v38.77M43.52 71.24h23.05" class="cls-4"/><path d="M82.91 51.86v38.77h16.55c4.41-.36 7.91-4.45 8.06-9.4.15-4.88-2.99-9.19-7.29-9.99 4.3-.79 7.44-5.1 7.29-9.99-.14-4.84-3.47-8.88-7.77-9.4H82.9Z" style="stroke-width:12px;stroke:#000000;stroke-linejoin:round;fill:none"/><path d="M82.91 71.24h17.33" class="cls-4"/><path d="M47.68 116.06c-8.48-13.02-15.72-12.3-20.67-8.71-4.5 3.27-7.01 8.82-7.01 14.58v24.68m27.68-.01v-30.54" class="cls-3"/><path d="M75.36 146.6v-23.47c0-6.09-2.65-11.94-7.38-15.45-12.13-9-20.31 8.38-20.31 8.38m76.49-10.97v42.1" class="cls-3"/><ellipse cx="105.28" cy="126.63" class="cls-3" rx="18.4" ry="20.56"/><path d="M135.76 104.9 172 147.19m0-42.29-36.24 42.29" class="cls-3"/></svg>` },
+        disney:    { text: '',   className: 'badge-disney', icon: `<svg fill="#000000" width="800px" height="800px" viewBox="0 0 24 24" id="disney-plus" data-name="Flat Color" xmlns="http://www.w3.org/2000/svg" class="icon flat-color"><path id="secondary" d="M19,8a1,1,0,0,1-1-1V6H17a1,1,0,0,1,0-2h1V3a1,1,0,0,1,2,0V4h1a1,1,0,0,1,0,2H20V7A1,1,0,0,1,19,8Z" style="fill: rgb(44, 169, 188);"></path><path id="primary" d="M17.89,12.58C16.47,4.87,7.42,4.26,2.84,5a1,1,0,1,0,.32,2c.12,0,11.34-1.78,12.76,6a3.39,3.39,0,0,1-1,3.38C13.59,17.58,11.1,18,9.19,17.92l-1-6.19a5.66,5.66,0,0,1,3.21,1.07,1,1,0,1,0,1.19-1.6A7.59,7.59,0,0,0,7.82,9.74l-.15-.9a1,1,0,1,0-2,.32l.14.84a7.67,7.67,0,0,0-1.33.48A4.07,4.07,0,0,0,2,14.06c0,2.54,2,4.68,5.16,5.57l.29.06.25,1.47a1,1,0,0,0,1,.84h.17a1,1,0,0,0,.82-1.15l-.15-.92h.19a10.1,10.1,0,0,0,6.59-2.12A5.4,5.4,0,0,0,17.89,12.58ZM4,14.06c0-.94.88-1.52,1.41-1.79A5.22,5.22,0,0,1,6.17,12l.92,5.52C5.15,16.79,4,15.54,4,14.06Z" style="fill: rgb(0, 0, 0);"></path></svg>` },
+        apple:     { text: '',   className: 'badge-apple', icon: `<svg width="24px" height="24px" viewBox="0 0 24 24" role="img" xmlns="http://www.w3.org/2000/svg"><path d="M20.57 17.735h-1.815l-3.34-9.203h1.633l2.02 5.987c.075.231.273.9.586 2.012l.297-.997.33-1.006 2.094-6.004H24zm-5.344-.066a5.76 5.76 0 0 1-1.55.207c-1.23 0-1.84-.693-1.84-2.087V9.646h-1.063V8.532h1.121V7.081l1.476-.602v2.062h1.707v1.113H13.38v5.805c0 .446.074.75.214.932.14.182.396.264.75.264.207 0 .495-.041.883-.115zm-7.29-5.343c.017 1.764 1.55 2.358 1.567 2.366-.017.042-.248.842-.808 1.658-.487.71-.99 1.418-1.79 1.435-.783.016-1.03-.462-1.93-.462-.89 0-1.17.445-1.913.478-.758.025-1.344-.775-1.838-1.484-.998-1.451-1.765-4.098-.734-5.88.51-.89 1.426-1.451 2.416-1.46.75-.016 1.468.512 1.93.512.461 0 1.327-.627 2.234-.536.38.016 1.452.157 2.136 1.154-.058.033-1.278.743-1.27 2.219M6.468 7.988c.404-.495.685-1.18.61-1.864-.585.025-1.294.388-1.723.883-.38.437-.71 1.138-.619 1.806.652.05 1.328-.338 1.732-.825z"/></svg>` },
+        paramount: { text: '',   className: 'badge-paramount', icon: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="100%" height="100%"><defs><linearGradient id="skyGrad" x1="0%" y1="0%" x2="0%" y2="100%"><stop offset="0%" stop-color="#0064d2"/><stop offset="100%" stop-color="#00185a"/></linearGradient></defs><rect width="256" height="256" fill="url(#skyGrad)"/><path d="M50 200 L128 80 L206 200 Z" fill="#ffffff"/><path d="M128 80 L160 145 L128 160 L95 145 Z" fill="#dbeafe" opacity="0.7"/><g fill="#ffffff"><circle cx="128" cy="40" r="5" /><circle cx="92" cy="47" r="5" /><circle cx="164" cy="47" r="5" /><circle cx="60" cy="67" r="5" /><circle cx="196" cy="67" r="5" /><circle cx="36" cy="98" r="5" /><circle cx="220" cy="98" r="5" /><circle cx="22" cy="138" r="5" /><circle cx="234" cy="138" r="5" /></g><path d="M 120 200 L 136 200 M 128 192 L 128 208" stroke="#0064d2" stroke-width="6" stroke-linecap="round"/></svg>` },
+        hulu:      { text: '',   className: 'badge-hulu', icon: `<svg width="32px" height="32px" viewBox="-4 -4 40 40" xmlns="http://www.w3.org/2000/svg"><path d="M19.197 9.807h-4.807c-0.943 0.016-1.875 0.199-2.751 0.543v-10.391h-7.719v32.083h7.729v-12.681c-0.067-1.204 0.876-2.229 2.084-2.267h4.52c1.152 0 2.095 0.923 2.12 2.079v12.787h7.704v-13.907c0-5.88-3-8.213-7.865-8.213z"/></svg>` },
+    };
 
 
 
@@ -249,6 +314,11 @@ document.addEventListener('DOMContentLoaded', () => {
     // Logo returns home (it already looks clickable via its pointer cursor).
     logoHome?.addEventListener('click', () => switchPage('home'));
 
+    // Placeholder footer/social anchors shouldn't jump the page to the top.
+    document.querySelector('footer')?.addEventListener('click', e => {
+        if (e.target.closest('a[href="#"]')) e.preventDefault();
+    });
+
     if (footerYear) footerYear.textContent = String(new Date().getFullYear());
 
     // ─── Nav Tab Switching ───────────────────────────────────────────────────
@@ -293,11 +363,40 @@ document.addEventListener('DOMContentLoaded', () => {
         closeProfileMenu();
         showToast('Sign out isn\u2019t available in this demo');
     });
+    // The hamburger dropdown has no backdrop of its own, so dismiss it on
+    // any tap outside it (and on Escape), like the other menus here.
+    function closeMobileNav() {
+        primaryNavigation?.classList.remove('open');
+        mobileNavToggle?.setAttribute('aria-expanded', 'false');
+        mobileNavToggle?.setAttribute('aria-label', 'Open navigation');
+    }
     document.addEventListener('click', (e) => {
         if (profileWrap && !profileWrap.contains(e.target)) closeProfileMenu();
+        if (mobileNavToggle && primaryNavigation &&
+            !primaryNavigation.contains(e.target) &&
+            !mobileNavToggle.contains(e.target)) {
+            closeMobileNav();
+        }
     });
     document.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape') closeProfileMenu();
+        if (e.key === 'Escape') { closeProfileMenu(); closeMobileNav(); }
+    });
+
+    // Closes the "Only on …" provider dropdown when clicking elsewhere or
+    // pressing Escape. Registered once here (not per-render) since the
+    // picker itself is rebuilt every time the provider row re-renders.
+    function closeProviderPicker() {
+        const open = document.querySelector('.provider-picker.open');
+        if (!open) return;
+        open.classList.remove('open');
+        open.querySelector('.provider-trigger')?.setAttribute('aria-expanded', 'false');
+    }
+    document.addEventListener('click', (e) => {
+        const open = document.querySelector('.provider-picker.open');
+        if (open && !open.contains(e.target)) closeProviderPicker();
+    });
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') closeProviderPicker();
     });
 
     function setActiveNav(page) {
@@ -305,7 +404,9 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function switchPage(page) {
-        if (page === currentPage && page !== 'mylist') return;
+        // homeGridActive: Home's nav entry must restore the rows when a
+        // provider grid has replaced them, so don't early-out for same-page.
+        if (page === currentPage && page !== 'mylist' && !homeGridActive) return;
         currentPage = page;
         setActiveNav(page);
         stopHeroRotation();
@@ -314,9 +415,20 @@ document.addEventListener('DOMContentLoaded', () => {
         resetHeroCrossfade();
         mylistEmpty.style.display = 'none';
         carouselsContainer.style.display = '';
+        // The bar shows only on Movies/TV Shows; each page has a different
+        // genre-name set, so any filter chosen on the other page is stale.
+        activeGenre = 'All';
+        const showGenreBar = (page === 'movies' || page === 'tvshows');
+        genreFilterBar.style.display = showGenreBar ? '' : 'none';
+        genreFilterBar.innerHTML = '';
+        // Swaps which element carries the -80px pull onto the hero: the bar
+        // when it's showing, carousels-container itself when it's not.
+        carouselsContainer.classList.toggle('with-genre-bar', showGenreBar);
 
-        // Smooth scroll to top when switching pages
-        window.scrollTo({ top: 0, behavior: 'smooth' });
+        // Scroll to top when switching pages — via scrollTopInstant(), not
+        // window.scrollTo (a no-op here: body is the effective scroller), and
+        // instant so the smooth animation can't fight the DOM rebuild below.
+        scrollTopInstant();
 
         if (page === 'mylist') {
             catalogRequestId++;
@@ -350,36 +462,19 @@ document.addEventListener('DOMContentLoaded', () => {
                     heroDesc.textContent  = 'Content could not be loaded.';
                     return;
                 }
-                heroMovies = movies.filter(m => m.banner).slice(0, 8);
+                allCatalogMovies = movies;
+
+                // Hero rendering stays here (outside renderCategoryRows) so
+                // genre-chip switches never touch the banner.
+                heroMovies = page === 'home' ? pickHomeHeroes(movies) : movies.filter(m => m.banner).slice(0, 8);
                 heroIndex  = 0;
                 renderHeroMovies(heroMovies);
                 startHeroRotation();
 
-                const categories = {};
-                if (page === 'home') {
-                    const cw = getContinueWatching();
-                    if (cw && cw.length > 0) {
-                        renderRow('Continue Watching', cw, true);
-                    }
+                if (page === 'movies' || page === 'tvshows') {
+                    buildGenreChips();
                 }
-                movies.forEach(movie => {
-                    (movie.categories || []).forEach(cat => {
-                        if (!categories[cat]) categories[cat] = [];
-                        categories[cat].push(movie);
-                    });
-                });
-                Object.keys(categories).forEach(cat => {
-                    let rowTitle = cat;
-                    let items = categories[cat];
-                    let top10 = false;
-                    // Netflix-style "Top 10" rows for the trending categories on Home
-                    if (page === 'home' && (cat === 'Trending Movies' || cat === 'Trending TV') && items.length >= 5) {
-                        top10 = true;
-                        rowTitle = cat === 'Trending Movies' ? 'Top 10 Movies Today' : 'Top 10 TV Shows Today';
-                        items = items.slice(0, 10);
-                    }
-                    renderRow(rowTitle, items, false, top10);
-                });
+                renderCategoryRows(page, applyGenreFilter(movies));
             })
             .catch(err => {
                 if (requestId !== catalogRequestId) return;
@@ -389,6 +484,724 @@ document.addEventListener('DOMContentLoaded', () => {
                 heroTitle.textContent = 'Connection Error';
                 heroDesc.textContent  = 'Could not reach the movie server.';
             });
+    }
+
+    // Renders everything below the hero: Continue Watching, the provider
+    // carousel and Genres picker rows (home only), and the category-grouped
+    // rows. Called on every fetch and again, with just a filtered slice,
+    // whenever the genre chip selection changes.
+    function renderCategoryRows(page, movies) {
+        carouselsContainer.innerHTML = '';
+        gridFeed = null; // any in-flight discover fetch now appends nowhere
+        homeGridActive = false; // rows are back, so the switchPage guard must not skip
+
+        const categories = {};
+        movies.forEach(movie => {
+            (movie.categories || []).forEach(cat => {
+                if (!categories[cat]) categories[cat] = [];
+                categories[cat].push(movie);
+            });
+        });
+
+        // Home row order: Continue Watching, Only on …, Genres, then the
+        // category rows from /api/home (whose payload order matches).
+        if (page === 'home') {
+            const cw = getContinueWatching();
+            if (cw && cw.length > 0) {
+                renderRow('Continue Watching', cw, true);
+            }
+
+            // Reserved slot so the async provider carousel lands here
+            // (second row) instead of wherever it happens to finish loading
+            // relative to the rest of the page.
+            const providerSlot = document.createElement('div');
+            providerSlot.id = 'provider-row-slot';
+            carouselsContainer.appendChild(providerSlot);
+            loadProvidersRow();
+
+            // Genres picker row sits third, above the catalog rows below.
+            renderHomeGenreRow(categories);
+
+            // Picked for You renders mid-loop, right after the Top-10 rows.
+        }
+
+        // Genre chip filtering (Movies/TV Shows pages): the per-source-category
+        // rows below are great for unfiltered browsing, but a genre match can
+        // land in any of ~15 source lists, so filtering them individually
+        // leaves most rows near-empty. Instead, pool every match into one
+        // deduplicated, well-populated row (source lists overlap, so the same
+        // title can appear more than once in `movies`).
+        if (activeGenre !== 'All') {
+            const seen = new Set();
+            const matches = [];
+            movies.forEach(m => {
+                const key = mediaKey(m);
+                if (seen.has(key)) return;
+                seen.add(key);
+                matches.push(m);
+            });
+
+            if (matches.length === 0) {
+                const notice = document.createElement('div');
+                notice.className = 'no-titles-notice';
+                notice.textContent = 'No titles found for this genre.';
+                carouselsContainer.appendChild(notice);
+                return;
+            }
+
+            matches.sort((a, b) => b.rating - a.rating);
+            renderGenreGrid(activeGenre, matches, page);
+            return;
+        }
+
+        if (Object.keys(categories).length === 0) {
+            const notice = document.createElement('div');
+            notice.className = 'no-titles-notice';
+            notice.textContent = 'No titles found for this genre.';
+            carouselsContainer.appendChild(notice);
+            return;
+        }
+
+        // Picked for You slots in after the Top-10 rows (or after whichever of
+        // them made it into the payload, should the other be missing).
+        const picksAfterCat = page === 'home'
+            ? ('Trending TV' in categories ? 'Trending TV' : 'Trending Movies')
+            : null;
+        const picks = page === 'home' ? buildPicksForYou(allCatalogMovies) : [];
+
+        Object.keys(categories).forEach(cat => {
+            if (page === 'home' && HOME_GENRE_ROWS.includes(cat)) return; // consolidated into the Genres picker row above
+            let rowTitle = cat;
+            let items = categories[cat];
+            let top10 = false;
+            // Netflix-style "Top 10" rows for the trending categories on Home
+            if (page === 'home' && (cat === 'Trending Movies' || cat === 'Trending TV') && items.length >= 5) {
+                top10 = true;
+                rowTitle = cat === 'Trending Movies' ? 'Top 10 Movies Today' : 'Top 10 TV Shows Today';
+                items = items.slice(0, 10);
+            }
+            renderRow(rowTitle, items, false, top10);
+            if (cat === picksAfterCat && picks.length >= 5) {
+                renderRow('Picked for You', picks);
+            }
+        });
+    }
+
+    // Renders genre-filtered results as a wrapping grid instead of a
+    // horizontal carousel, revealing cached matches as the user scrolls near
+    // the bottom; once they run out, further pages are fetched from
+    // /api/discover and appended (deduplicated against everything shown).
+    const GENRE_GRID_BATCH = 24;
+
+    // Shared poster-grid renderer: cached matches first, then /api/discover
+    // pages via feedQuery(page). headerNode (optional) replaces the plain
+    // title — the provider grid puts its back button + provider picker there.
+    function renderGrid(titleText, matches, feedQuery, headerNode) {
+        const section = document.createElement('div');
+        section.className = 'genre-grid-section';
+
+        if (headerNode) {
+            section.appendChild(headerNode);
+        } else {
+            const title = document.createElement('h3');
+            title.className = 'genre-grid-title';
+            title.textContent = titleText;
+            section.appendChild(title);
+        }
+
+        const grid = document.createElement('div');
+        grid.className = 'genre-grid';
+        section.appendChild(grid);
+
+        const sentinel = document.createElement('div');
+        sentinel.className = 'genre-grid-sentinel';
+        section.appendChild(sentinel);
+
+        carouselsContainer.appendChild(section);
+
+        // One feed per grid: identity-checked by the in-flight fetch so a
+        // chip/page switch mid-request strands the stale response.
+        gridFeed = {
+            query: feedQuery,
+            page: 1,
+            seen: new Set(matches.map(mediaKey)),
+            done: false,
+            inflight: false,
+            dryRounds: 0,
+        };
+
+        let loaded = 0;
+        let loadingEl = null;
+        const observer = new IntersectionObserver((entries) => {
+            if (entries[0].isIntersecting) loadMoreGenreItems();
+        }, { rootMargin: '800px' });
+
+        function loadMoreGenreItems() {
+            if (loaded < matches.length) {
+                const next = matches.slice(loaded, loaded + GENRE_GRID_BATCH);
+                next.forEach(m => grid.appendChild(createPosterCard(m)));
+                loaded += next.length;
+            }
+            if (loaded >= matches.length) fetchMoreGenreItems();
+        }
+
+        // Fetches the next /api/discover page and appends the titles not
+        // already shown. An empty page (or TMDB's 500-page cap) ends the
+        // feed; a network failure keeps the sentinel so the next scroll
+        // retries. Stale responses (grid rebuilt mid-fetch) bail on the
+        // gridFeed identity check.
+        async function fetchMoreGenreItems() {
+            const feed = gridFeed;
+            if (!feed || feed.done || feed.inflight) return;
+            feed.inflight = true;
+            toggleGridLoading(true);
+            try {
+                const res = await fetch(`/api/discover?${feed.query(feed.page)}`);
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                const items = await res.json();
+                if (gridFeed !== feed) return; // grid was rebuilt mid-fetch
+                if (!Array.isArray(items) || items.length === 0 || feed.page >= 500) {
+                    finishFeed();
+                    return;
+                }
+                feed.page++;
+                let added = 0;
+                for (const m of items) {
+                    const key = mediaKey(m);
+                    if (feed.seen.has(key)) continue;
+                    feed.seen.add(key);
+                    grid.appendChild(createPosterCard(m));
+                    added++;
+                }
+                feed.dryRounds = added > 0 ? 0 : feed.dryRounds + 1;
+                if (feed.dryRounds >= 4) { finishFeed(); return; } // pages keep returning only dupes
+            } catch (err) {
+                if (gridFeed !== feed) return;
+                console.error('Discover fetch failed:', err);
+            } finally {
+                const stale = gridFeed !== feed;
+                if (!stale) {
+                    feed.inflight = false;
+                    toggleGridLoading(false);
+                    // The observer is edge-triggered: while the sentinel
+                    // stays in view it never refires, so keep loading until
+                    // the appended rows push it out of the 800px window.
+                    if (!feed.done && sentinelNearViewport()) loadMoreGenreItems();
+                } else {
+                    loadingEl?.remove();
+                }
+            }
+        }
+
+        function finishFeed() {
+            if (!gridFeed) return;
+            gridFeed.done = true;
+            toggleGridLoading(false);
+            observer.disconnect();
+            sentinel.remove();
+        }
+
+        function sentinelNearViewport() {
+            const rect = sentinel.getBoundingClientRect();
+            return rect.top < window.innerHeight + 800 && rect.bottom > 0;
+        }
+
+        function toggleGridLoading(show) {
+            if (show && !loadingEl) {
+                loadingEl = document.createElement('div');
+                loadingEl.className = 'genre-grid-loading';
+                sentinel.parentNode.insertBefore(loadingEl, sentinel);
+            } else if (!show && loadingEl) {
+                loadingEl.remove();
+                loadingEl = null;
+            }
+        }
+
+        loadMoreGenreItems();
+        // Always observe: even when the cached matches all fit in the first
+        // batch (loaded === matches.length) the discover fetch chain can
+        // park with the sentinel off-screen, and scrolling is what resumes
+        // it. Redundant callbacks are guarded by done/inflight.
+        observer.observe(sentinel);
+    }
+
+    // Genre chips (Movies/TV Shows pages) feed the shared grid a fixed-type
+    // discover query; the server resolves the genre name to its TMDB ID.
+    function renderGenreGrid(genreName, matches, page) {
+        const type = page === 'tvshows' ? 'tv' : 'movie';
+        renderGrid(genreName, matches, p => `type=${type}&genre=${encodeURIComponent(genreName)}&page=${p}`);
+    }
+
+    // Renders Home's "Genres" carousel: one row with a dropdown (reusing the
+    // "Only on …" picker's look) instead of a separate carousel per genre.
+    function renderHomeGenreRow(categories) {
+        const available = HOME_GENRE_ROWS.filter(g => (categories[g] || []).length > 0);
+        if (available.length === 0) return;
+        if (!available.includes(activeHomeGenre)) activeHomeGenre = available[0];
+
+        const rowDiv = document.createElement('div');
+        rowDiv.className = 'row';
+
+        const rowHeader = document.createElement('div');
+        rowHeader.className = 'row-header';
+
+        // Pure client-side swap — the whole catalog is already in memory.
+        rowHeader.appendChild(makeGenrePicker(available, () => {
+            postersDiv.innerHTML = '';
+            (categories[activeHomeGenre] || []).forEach(movie => postersDiv.appendChild(createPosterCard(movie)));
+        }));
+
+        // "Explore All" opens the genre's full catalog as a paginated grid,
+        // same flow as the provider rows.
+        const exploreAll = document.createElement('button');
+        exploreAll.type = 'button';
+        exploreAll.className = 'row-explore-all explore-all-static';
+        exploreAll.innerHTML = `Explore All <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>`;
+        exploreAll.addEventListener('click', () => openHomeGenreGrid(activeHomeGenre));
+        rowHeader.appendChild(exploreAll);
+
+        rowDiv.appendChild(rowHeader);
+
+        const scrollWrap = document.createElement('div');
+        scrollWrap.className = 'row-scroll-wrap';
+
+        const edgeLeft = document.createElement('button');
+        edgeLeft.className = 'row-edge-arrow row-edge-arrow-left';
+        edgeLeft.setAttribute('aria-label', 'Scroll left');
+        edgeLeft.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="15 18 9 12 15 6"></polyline></svg>`;
+
+        const edgeRight = document.createElement('button');
+        edgeRight.className = 'row-edge-arrow row-edge-arrow-right';
+        edgeRight.setAttribute('aria-label', 'Scroll right');
+        edgeRight.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="9 18 15 12 9 6"></polyline></svg>`;
+
+        const postersDiv = document.createElement('div');
+        postersDiv.className = 'row-posters';
+
+        const scrollAmount = 700;
+        edgeLeft.addEventListener('click', () => postersDiv.scrollBy({ left: -scrollAmount, behavior: 'smooth' }));
+        edgeRight.addEventListener('click', () => postersDiv.scrollBy({ left: scrollAmount, behavior: 'smooth' }));
+
+        (categories[activeHomeGenre] || []).forEach(movie => postersDiv.appendChild(createPosterCard(movie)));
+
+        postersDiv.setAttribute('tabindex', '0');
+        postersDiv.addEventListener('keydown', e => {
+            if (e.key === 'ArrowRight') { e.preventDefault(); postersDiv.scrollBy({ left: 220, behavior: 'smooth' }); }
+            if (e.key === 'ArrowLeft')  { e.preventDefault(); postersDiv.scrollBy({ left: -220, behavior: 'smooth' }); }
+        });
+
+        scrollWrap.appendChild(edgeLeft);
+        scrollWrap.appendChild(postersDiv);
+        scrollWrap.appendChild(edgeRight);
+        rowDiv.appendChild(scrollWrap);
+
+        carouselsContainer.appendChild(rowDiv);
+    }
+
+    // ─── Genre chip filter (Movies & TV Shows pages) ───────────────────────────
+    // Canonical display order for chips; anything not listed falls back to
+    // alphabetical order after these.
+    const GENRE_ORDER = ['Action', 'Adventure', 'Animation', 'Comedy', 'Crime', 'Documentary',
+        'Drama', 'Family', 'Fantasy', 'History', 'Horror', 'Music', 'Mystery', 'Romance',
+        'Science Fiction', 'Thriller', 'War', 'Western'];
+
+    function buildGenreChips() {
+        const genreSet = new Set();
+        allCatalogMovies.forEach(m => (m.genres || []).forEach(g => genreSet.add(g)));
+        const genres = Array.from(genreSet).sort((a, b) => {
+            const ia = GENRE_ORDER.indexOf(a), ib = GENRE_ORDER.indexOf(b);
+            if (ia === -1 && ib === -1) return a.localeCompare(b);
+            if (ia === -1) return 1;
+            if (ib === -1) return -1;
+            return ia - ib;
+        });
+
+        genreFilterBar.innerHTML = '';
+        const makeChip = (label) => {
+            const chip = document.createElement('button');
+            chip.type = 'button';
+            chip.className = 'genre-chip' + (activeGenre === label ? ' active' : '');
+            chip.textContent = label;
+            chip.setAttribute('aria-pressed', String(activeGenre === label));
+            chip.addEventListener('click', () => {
+                if (activeGenre === label) return;
+                activeGenre = label;
+                genreFilterBar.querySelectorAll('.genre-chip').forEach(c => {
+                    const isActive = c.textContent === label;
+                    c.classList.toggle('active', isActive);
+                    c.setAttribute('aria-pressed', String(isActive));
+                });
+                renderCategoryRows(currentPage, applyGenreFilter(allCatalogMovies));
+            });
+            return chip;
+        };
+
+        genreFilterBar.appendChild(makeChip('All'));
+        genres.forEach(g => genreFilterBar.appendChild(makeChip(g)));
+    }
+
+    function applyGenreFilter(movies) {
+        if (activeGenre === 'All') return movies;
+        return movies.filter(m => (m.genres || []).includes(activeGenre));
+    }
+
+    // ─── Diversified hero (Home) ────────────────────────────────────────────
+    // Alternates movie/TV picks from the first movie- and TV-type category
+    // groups in payload order, instead of always drawing all 8 banners from
+    // today's trending movies.
+    function pickHomeHeroes(movies) {
+        const movieCat = movies.find(m => m.type === 'movie' && (m.categories || []).length)?.categories?.[0];
+        const tvCat    = movies.find(m => m.type === 'tv'    && (m.categories || []).length)?.categories?.[0];
+        const movieItems = movies.filter(m => m.banner && m.type === 'movie' && (!movieCat || (m.categories || []).includes(movieCat)));
+        const tvItems    = movies.filter(m => m.banner && m.type === 'tv'    && (!tvCat    || (m.categories || []).includes(tvCat)));
+
+        const picks = [];
+        let i = 0;
+        while (picks.length < 8 && (i < movieItems.length || i < tvItems.length)) {
+            if (i < movieItems.length) picks.push(movieItems[i]);
+            if (picks.length < 8 && i < tvItems.length) picks.push(tvItems[i]);
+            i++;
+        }
+        // Fall back to the plain banner slice if the payload didn't yield
+        // enough diversified picks (e.g. seeded test data).
+        if (picks.length < 8) {
+            const seen = new Set(picks.map(mediaKey));
+            for (const m of movies) {
+                if (picks.length >= 8) break;
+                if (m.banner && !seen.has(mediaKey(m))) { picks.push(m); seen.add(mediaKey(m)); }
+            }
+        }
+        return picks.slice(0, 8);
+    }
+
+    // ─── Picked for You (Home) ──────────────────────────────────────────────
+    function buildPicksForYou(catalog) {
+        const signal = [...getMyList(), ...getContinueWatching()];
+        if (signal.length === 0) return [];
+
+        const genreCounts = {};
+        signal.forEach(m => (m.genres || []).forEach(g => { genreCounts[g] = (genreCounts[g] || 0) + 1; }));
+        const topGenres = Object.keys(genreCounts)
+            .sort((a, b) => genreCounts[b] - genreCounts[a])
+            .slice(0, 3);
+        if (topGenres.length === 0) return [];
+
+        const excludeKeys = new Set(signal.map(mediaKey));
+        const candidates = catalog
+            .filter(m => !excludeKeys.has(mediaKey(m)))
+            .map(m => {
+                const matchCount = (m.genres || []).filter(g => topGenres.includes(g)).length;
+                return { m, matchCount };
+            })
+            .filter(({ matchCount }) => matchCount > 0);
+
+        candidates.sort((a, b) => (b.matchCount - a.matchCount) || (b.m.rating - a.m.rating));
+        return candidates.slice(0, 20).map(({ m }) => m);
+    }
+
+    // ─── "Only on …" provider carousel (Home) ──────────────────────────────
+    // Server-cached per-provider lists; switching providers is a pure
+    // client-side swap over data already fetched once per Home visit.
+    function loadProvidersRow() {
+        const requestId = ++providersRequestId;
+        fetch('/api/providers')
+            .then(res => {
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                return res.json();
+            })
+            .then(data => {
+                if (requestId !== providersRequestId || currentPage !== 'home') return;
+                if (!data || Object.keys(data).length === 0) return;
+                providersData = data;
+                if (!providersData[activeProvider] || providersData[activeProvider].length === 0) {
+                    const fallback = PROVIDERS.find(p => (providersData[p.key] || []).length > 0);
+                    if (!fallback) return;
+                    activeProvider = fallback.key;
+                }
+                renderProviderRow(providersData[activeProvider]);
+            })
+            .catch(err => {
+                console.warn('Could not load provider carousel:', err);
+            });
+    }
+
+    function renderProviderRow(items) {
+        const slot = document.getElementById('provider-row-slot');
+        if (!slot || !items || items.length === 0) return;
+        slot.innerHTML = '';
+
+        const rowDiv = document.createElement('div');
+        rowDiv.className = 'row';
+
+        const rowHeader = document.createElement('div');
+        rowHeader.className = 'row-header';
+
+        rowHeader.appendChild(makeProviderPicker(() => {
+            postersDiv.innerHTML = '';
+            (providersData[activeProvider] || []).forEach(movie => postersDiv.appendChild(createPosterCard(movie)));
+        }));
+
+        // "Explore All" opens the provider's full catalog as a paginated grid
+        // (movies + TV interleaved server-side, fetched page by page on scroll).
+        const exploreAll = document.createElement('button');
+        exploreAll.type = 'button';
+        exploreAll.className = 'row-explore-all explore-all-static';
+        exploreAll.innerHTML = `Explore All <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>`;
+        exploreAll.addEventListener('click', () => openProviderGrid(activeProvider));
+        rowHeader.appendChild(exploreAll);
+
+        rowDiv.appendChild(rowHeader);
+
+        const scrollWrap = document.createElement('div');
+        scrollWrap.className = 'row-scroll-wrap';
+
+        const edgeLeft = document.createElement('button');
+        edgeLeft.className = 'row-edge-arrow row-edge-arrow-left';
+        edgeLeft.setAttribute('aria-label', 'Scroll left');
+        edgeLeft.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="15 18 9 12 15 6"></polyline></svg>`;
+
+        const edgeRight = document.createElement('button');
+        edgeRight.className = 'row-edge-arrow row-edge-arrow-right';
+        edgeRight.setAttribute('aria-label', 'Scroll right');
+        edgeRight.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="9 18 15 12 9 6"></polyline></svg>`;
+
+        const postersDiv = document.createElement('div');
+        postersDiv.className = 'row-posters';
+
+        const scrollAmount = 700;
+        edgeLeft.addEventListener('click', () => postersDiv.scrollBy({ left: -scrollAmount, behavior: 'smooth' }));
+        edgeRight.addEventListener('click', () => postersDiv.scrollBy({ left: scrollAmount, behavior: 'smooth' }));
+
+        items.forEach(movie => postersDiv.appendChild(createPosterCard(movie)));
+
+        postersDiv.setAttribute('tabindex', '0');
+        postersDiv.addEventListener('keydown', e => {
+            if (e.key === 'ArrowRight') { e.preventDefault(); postersDiv.scrollBy({ left: 220, behavior: 'smooth' }); }
+            if (e.key === 'ArrowLeft')  { e.preventDefault(); postersDiv.scrollBy({ left: -220, behavior: 'smooth' }); }
+        });
+
+        scrollWrap.appendChild(edgeLeft);
+        scrollWrap.appendChild(postersDiv);
+        scrollWrap.appendChild(edgeRight);
+        rowDiv.appendChild(scrollWrap);
+
+        slot.appendChild(rowDiv);
+    }
+
+    // Builds the "Only on …" dropdown (trigger + option menu) shared by the
+    // Home carousel row and the provider Explore-All grid. Only lists
+    // providers the cache has titles for — TMDB's regional coverage varies a
+    // lot per provider, so an entry can come back empty even with a correct
+    // ID; showing it anyway would just land the user on a blank strip.
+    // onSelect(key) fires after a different provider is chosen (menu closed,
+    // aria + trigger label updated); call sites re-render their content.
+    function makeProviderPicker(onSelect) {
+        const pickerWrap = document.createElement('div');
+        pickerWrap.className = 'provider-picker';
+
+        const trigger = document.createElement('button');
+        trigger.type = 'button';
+        trigger.className = 'provider-trigger';
+        trigger.setAttribute('aria-haspopup', 'listbox');
+        trigger.setAttribute('aria-expanded', 'false');
+        const currentLabel = PROVIDERS.find(p => p.key === activeProvider)?.label || '';
+        trigger.innerHTML = `<h3>Only on <span class="provider-current">${escapeHtml(currentLabel)}</span></h3>
+            <svg class="provider-chevron" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>`;
+
+        const menu = document.createElement('div');
+        menu.className = 'provider-menu';
+        menu.setAttribute('role', 'listbox');
+        menu.setAttribute('aria-label', 'Choose streaming provider');
+        PROVIDERS.filter(p => (providersData[p.key] || []).length > 0).forEach(p => {
+            const badge = PROVIDER_BADGES[p.key];
+            const opt = document.createElement('button');
+            opt.type = 'button';
+            opt.setAttribute('role', 'option');
+            opt.className = 'provider-option';
+            opt.dataset.provider = p.key;
+            opt.setAttribute('aria-selected', String(p.key === activeProvider));
+            opt.innerHTML = `<span class="provider-badge ${badge.className}">${badge.icon || badge.text}</span><span>${escapeHtml(p.label)}</span>`;
+            menu.appendChild(opt);
+        });
+
+        trigger.addEventListener('click', (e) => {
+            e.stopPropagation();
+            document.querySelectorAll('.provider-picker.open').forEach(p => { if (p !== pickerWrap) p.classList.remove('open'); });
+            const open = pickerWrap.classList.toggle('open');
+            trigger.setAttribute('aria-expanded', String(open));
+        });
+
+        menu.querySelectorAll('.provider-option').forEach(opt => {
+            opt.addEventListener('click', () => {
+                const key = opt.dataset.provider;
+                pickerWrap.classList.remove('open');
+                trigger.setAttribute('aria-expanded', 'false');
+                if (key === activeProvider) return;
+                activeProvider = key;
+                trigger.querySelector('.provider-current').textContent = PROVIDERS.find(p => p.key === activeProvider)?.label || '';
+                menu.querySelectorAll('.provider-option').forEach(o => o.setAttribute('aria-selected', String(o.dataset.provider === activeProvider)));
+                onSelect(key);
+            });
+        });
+
+        pickerWrap.appendChild(trigger);
+        pickerWrap.appendChild(menu);
+        return pickerWrap;
+    }
+
+    // Builds the "Genres …" dropdown shared by Home's genre carousel row and
+    // its Explore-All grid, mirroring makeProviderPicker's look. available is
+    // the label list to offer (callers only pass genres with cached titles).
+    // onSelect(label) fires after a different genre is chosen (menu closed,
+    // aria + trigger label updated); call sites re-render their content.
+    function makeGenrePicker(available, onSelect) {
+        const pickerWrap = document.createElement('div');
+        pickerWrap.className = 'provider-picker';
+
+        const trigger = document.createElement('button');
+        trigger.type = 'button';
+        trigger.className = 'provider-trigger';
+        trigger.setAttribute('aria-haspopup', 'listbox');
+        trigger.setAttribute('aria-expanded', 'false');
+        trigger.innerHTML = `<h3>Genres: <span class="provider-current">${escapeHtml(activeHomeGenre)}</span></h3>
+            <svg class="provider-chevron" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>`;
+
+        const menu = document.createElement('div');
+        menu.className = 'provider-menu';
+        menu.setAttribute('role', 'listbox');
+        menu.setAttribute('aria-label', 'Choose genre');
+        available.forEach(g => {
+            const opt = document.createElement('button');
+            opt.type = 'button';
+            opt.setAttribute('role', 'option');
+            opt.className = 'provider-option';
+            opt.dataset.genre = g;
+            opt.setAttribute('aria-selected', String(g === activeHomeGenre));
+            opt.innerHTML = `<span>${escapeHtml(g)}</span>`;
+            menu.appendChild(opt);
+        });
+
+        trigger.addEventListener('click', (e) => {
+            e.stopPropagation();
+            document.querySelectorAll('.provider-picker.open').forEach(p => { if (p !== pickerWrap) p.classList.remove('open'); });
+            const open = pickerWrap.classList.toggle('open');
+            trigger.setAttribute('aria-expanded', String(open));
+        });
+
+        menu.querySelectorAll('.provider-option').forEach(opt => {
+            opt.addEventListener('click', () => {
+                const g = opt.dataset.genre;
+                pickerWrap.classList.remove('open');
+                trigger.setAttribute('aria-expanded', 'false');
+                if (g === activeHomeGenre) return;
+                activeHomeGenre = g;
+                trigger.querySelector('.provider-current').textContent = g;
+                menu.querySelectorAll('.provider-option').forEach(o => o.setAttribute('aria-selected', String(o.dataset.genre === activeHomeGenre)));
+                onSelect(g);
+            });
+        });
+
+        pickerWrap.appendChild(trigger);
+        pickerWrap.appendChild(menu);
+        return pickerWrap;
+    }
+
+    // ─── Provider Explore-All grid (Home) ───────────────────────────────────
+    // Replaces the Home rows with a paginated grid of everything on the
+    // provider: the carousel's cached items first, then /api/discover pages
+    // (movies + TV interleaved server-side) as the user scrolls. The header
+    // keeps the provider picker so the user can hop providers without going
+    // back first.
+    function openProviderGrid(key) {
+        homeGridActive = true;
+        carouselsContainer.innerHTML = ''; // the grid replaces the Home rows
+        const items = providersData[key] || [];
+
+        const header = document.createElement('div');
+        header.className = 'provider-grid-header';
+
+        header.appendChild(makeGridBackButton());
+
+        header.appendChild(makeProviderPicker((newKey) => openProviderGrid(newKey)));
+
+        renderGrid(null, items, p => `provider=${encodeURIComponent(key)}&page=${p}`, header);
+
+        scrollTopInstant();
+    }
+
+    // The pill that leaves an Explore-All grid and rebuilds the Home rows.
+    function makeGridBackButton() {
+        const back = document.createElement('button');
+        back.type = 'button';
+        back.className = 'grid-back-btn';
+        back.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg> Back`;
+        back.addEventListener('click', () => renderCategoryRows('home', allCatalogMovies));
+        return back;
+    }
+
+    // Explore All clicks land mid-page; their grids start at the top. Both
+    // scroll paths are set because body is the effective scroll container.
+    function scrollTopInstant() {
+        const scroller = document.scrollingElement || document.documentElement;
+        scroller.scrollTop = 0;
+        document.body.scrollTop = 0;
+    }
+
+    // ─── Genre Explore-All grid (Home) ──────────────────────────────────────
+    // Same flow as the provider grid: cached home-row matches first, then
+    // /api/discover pages as the user scrolls. HOME_GENRE_ROWS labels are row
+    // names, not all of them TMDB genre names ("Anime", "Comedy Shows",
+    // "Sci-Fi"), and each home row is single-type, so each label maps to its
+    // discover feed's type + server-resolvable TMDB genre name.
+    const HOME_GENRE_FEEDS = {
+        'Action':             { type: 'movie', genre: 'Action' },
+        'Action & Adventure': { type: 'tv',    genre: 'Action & Adventure' },
+        'Comedy':             { type: 'movie', genre: 'Comedy' },
+        'Comedy Shows':       { type: 'tv',    genre: 'Comedy' },
+        'Horror':             { type: 'movie', genre: 'Horror' },
+        'Sci-Fi':             { type: 'movie', genre: 'Science Fiction' },
+        'Sci-Fi & Fantasy':   { type: 'tv',    genre: 'Sci-Fi & Fantasy' },
+        'Drama':              { type: 'tv',    genre: 'Drama' },
+        'Mystery':            { type: 'tv',    genre: 'Mystery' },
+        'Romance':            { type: 'movie', genre: 'Romance' },
+        'Animation':          { type: 'movie', genre: 'Animation' },
+        'Anime':              { type: 'tv',    genre: 'Animation' }
+    };
+
+    function openHomeGenreGrid(label) {
+        homeGridActive = true;
+        carouselsContainer.innerHTML = ''; // the grid replaces the Home rows
+        activeHomeGenre = label;
+
+        // Cached matches for this home row, deduplicated, best-rated first —
+        // the same pooling the genre rows use.
+        const seen = new Set();
+        const items = [];
+        allCatalogMovies.forEach(m => {
+            if (!(m.categories || []).includes(label)) return;
+            const key = mediaKey(m);
+            if (seen.has(key)) return;
+            seen.add(key);
+            items.push(m);
+        });
+        items.sort((a, b) => b.rating - a.rating);
+
+        const available = HOME_GENRE_ROWS.filter(g =>
+            allCatalogMovies.some(m => (m.categories || []).includes(g)));
+
+        const header = document.createElement('div');
+        header.className = 'provider-grid-header';
+
+        header.appendChild(makeGridBackButton());
+
+        header.appendChild(makeGenrePicker(available, (g) => openHomeGenreGrid(g)));
+
+        const feed = HOME_GENRE_FEEDS[label] || { type: 'movie', genre: label };
+        renderGrid(null, items,
+            p => `type=${feed.type}&genre=${encodeURIComponent(feed.genre)}&page=${p}`,
+            header);
+
+        scrollTopInstant();
     }
 
     // ─── My List Page ────────────────────────────────────────────────────────
@@ -439,6 +1252,7 @@ document.addEventListener('DOMContentLoaded', () => {
         mylistEmpty.style.display = 'none';
         heroMovies = remaining.filter(m => m.banner).slice(0, 6);
         if (heroMovies.length === 0) heroMovies = remaining.slice(0, 6);
+        if (!heroMovies[0].banner) hero.style.backgroundImage = ''; // setHero won't repaint it
         heroIndex = 0;
         renderHeroMovies(heroMovies);
         if (heroMovies.length > 1) startHeroRotation();
@@ -454,6 +1268,16 @@ document.addEventListener('DOMContentLoaded', () => {
         } else {
             mylistEmpty.style.display = 'none';
             heroMovies = list.filter(m => m.banner).slice(0, 6);
+            if (heroMovies.length === 0) {
+                // Bannerless entries: neutralize the banner area instead of
+                // keeping the previous page's artwork here (setHero only
+                // repaints when a banner exists).
+                heroTitle.textContent = 'My List';
+                heroDesc.textContent = '';
+                heroMetaRow.innerHTML = '';
+                resetHeroCrossfade();
+                hero.style.backgroundImage = '';
+            }
             heroIndex  = 0;
             renderHeroMovies(heroMovies);
             if (heroMovies.length > 1) startHeroRotation();
@@ -628,6 +1452,9 @@ document.addEventListener('DOMContentLoaded', () => {
     function startHeroRotation() {
         stopHeroRotation();
         if (heroMovies.length <= 1) return;
+        // Auto-advancing banners are exactly the motion the reduce-motion
+        // preference asks to skip; manual dot selection still works.
+        if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
         heroRotateTimer = setInterval(() => {
             // Pause rotation while the tab is hidden or a modal/overlay is open
             if (document.hidden ||
@@ -655,17 +1482,6 @@ document.addEventListener('DOMContentLoaded', () => {
         const titleEl = document.createElement('h3');
         titleEl.textContent = title;
         rowHeader.appendChild(titleEl);
-
-        // Netflix-style "Explore All" affordance, revealed on row hover
-        const exploreAll = document.createElement('button');
-        exploreAll.type = 'button';
-        exploreAll.className = 'row-explore-all';
-        exploreAll.innerHTML = `Explore All <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>`;
-        exploreAll.addEventListener('click', () => {
-            const strip = rowDiv.querySelector('.row-posters');
-            if (strip) strip.scrollTo({ left: strip.scrollWidth, behavior: 'smooth' });
-        });
-        rowHeader.appendChild(exploreAll);
 
         rowDiv.appendChild(rowHeader);
 
@@ -971,7 +1787,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // Reset trailer
         detailTrailerWrap.style.display = 'none';
-        detailTrailerIframe.src = '';
+        detailTrailerIframe.src = 'about:blank'; // '' would resolve to this app's own URL and reload the whole page inside the hidden iframe
         detailHero.classList.remove('trailer-active');
         detailTrailerBtn.style.display = 'none';
 
@@ -1037,6 +1853,13 @@ document.addEventListener('DOMContentLoaded', () => {
             .then(data => {
                 if (requestId !== detailRequestId || currentDetailMovie !== movie) return;
                 currentDetailData = data;
+                // Continue Watching cards are stored without `banner` (trimmed
+                // to keep localStorage small — see addToContinueWatching), so
+                // the hero opened blank. Backfill it from the freshly-fetched
+                // TMDB detail now that it's available.
+                if (!movie.banner && data.backdrop_path) {
+                    detailHero.style.backgroundImage = `url('${CSS.escape('https://image.tmdb.org/t/p/original' + data.backdrop_path)}')`;
+                }
                 populateDetailModal(movie, data);
             })
             .catch(err => {
@@ -1181,6 +2004,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 const card = document.createElement('div');
                 card.className = 'related-card';
                 card.title = recTitle;
+                card.setAttribute('role', 'button');
+                card.setAttribute('tabindex', '0');
+                card.setAttribute('aria-label', `View details for ${recTitle}`);
 
                 const img = document.createElement('img');
                 img.src = recMovie.thumbnail;
@@ -1195,9 +2021,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 card.appendChild(img);
                 card.appendChild(lbl);
-                card.addEventListener('click', () => {
+                const openRec = () => {
                     closeDetailModal();
                     setTimeout(() => openDetailModal(recMovie), 380);
+                };
+                card.addEventListener('click', openRec);
+                card.addEventListener('keydown', e => {
+                    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openRec(); }
                 });
                 detailRelatedRow.appendChild(card);
             });
@@ -1206,19 +2036,31 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // ─── Season selector ─────────────────────────────────────────────────────
     function buildSeasonSelector(movie, seasons) {
-        detailSeasonSelect.innerHTML = '';
-        seasons.forEach(s => {
-            const opt = document.createElement('option');
-            opt.value = s.season_number;
-            opt.textContent = s.name || `Season ${s.season_number}`;
-            detailSeasonSelect.appendChild(opt);
+        detailSeasonMenu.innerHTML = '';
+        detailSeasonPicker.classList.remove('open');
+        detailSeasonTrigger.setAttribute('aria-expanded', 'false');
+
+        seasons.forEach((s, i) => {
+            const label = s.name || `Season ${s.season_number}`;
+            const opt = document.createElement('button');
+            opt.type = 'button';
+            opt.className = 'provider-option';
+            opt.setAttribute('role', 'option');
+            opt.dataset.season = s.season_number;
+            opt.setAttribute('aria-selected', String(i === 0));
+            opt.textContent = label;
+            opt.addEventListener('click', () => {
+                detailSeasonPicker.classList.remove('open');
+                detailSeasonTrigger.setAttribute('aria-expanded', 'false');
+                const alreadySelected = opt.getAttribute('aria-selected') === 'true';
+                detailSeasonMenu.querySelectorAll('.provider-option').forEach(o => o.setAttribute('aria-selected', String(o === opt)));
+                detailSeasonCurrent.textContent = label;
+                if (!alreadySelected) loadEpisodes(movie.id, s.season_number);
+            });
+            detailSeasonMenu.appendChild(opt);
         });
 
-        detailSeasonSelect.onchange = () => {
-            const seasonNum = parseInt(detailSeasonSelect.value);
-            loadEpisodes(movie.id, seasonNum);
-        };
-
+        detailSeasonCurrent.textContent = seasons[0].name || `Season ${seasons[0].season_number}`;
         loadEpisodes(movie.id, seasons[0].season_number);
     }
 
@@ -1248,17 +2090,21 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function renderEpisodeList(episodes) {
         detailEpisodeList.innerHTML = '';
+        detailEpisodeList.classList.remove('scrollable');
         if (!episodes || episodes.length === 0) {
             detailEpisodeList.innerHTML = '<div class="episode-no-results">No episodes found.</div>';
             return;
         }
 
-        const seasonNum = parseInt(detailSeasonSelect.value) || 1;
+        const seasonNum = parseInt(detailSeasonMenu.querySelector('.provider-option[aria-selected="true"]')?.dataset.season) || 1;
 
         episodes.forEach(ep => {
             const item = document.createElement('div');
             item.className = 'episode-list-item';
             item.title = `Play ${ep.name}`;
+            item.setAttribute('role', 'button');
+            item.setAttribute('tabindex', '0');
+            item.setAttribute('aria-label', `Play ${ep.name}`);
 
             const numBadge = document.createElement('div');
             numBadge.className = 'episode-num-badge';
@@ -1315,14 +2161,22 @@ document.addEventListener('DOMContentLoaded', () => {
             item.appendChild(stillWrap);
             item.appendChild(info);
 
-            item.addEventListener('click', () => {
+            const playThisEpisode = () => {
                 if (!currentDetailMovie) return;
                 closeDetailModal();
                 setTimeout(() => launchPlayer(currentDetailMovie, seasonNum, ep.episode_number), 380);
+            };
+            item.addEventListener('click', playThisEpisode);
+            item.addEventListener('keydown', e => {
+                if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); playThisEpisode(); }
             });
 
             detailEpisodeList.appendChild(item);
         });
+
+        // Re-enable the overflow fade hint only when this list can scroll.
+        detailEpisodeList.classList.toggle('scrollable',
+            detailEpisodeList.scrollHeight > detailEpisodeList.clientHeight + 40);
     }
 
     // Episode search filter
@@ -1350,7 +2204,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"></rect><line x1="9" y1="9" x2="15" y2="15"></line><line x1="15" y1="9" x2="9" y2="15"></line></svg>
                 Close Trailer`;
         } else {
-            detailTrailerIframe.src = '';
+            detailTrailerIframe.src = 'about:blank'; // '' would resolve to this app's own URL and reload the whole page inside the hidden iframe
             detailTrailerWrap.style.display = 'none';
             detailHero.classList.remove('trailer-active');
             detailTrailerBtn.innerHTML = `
@@ -1366,7 +2220,7 @@ document.addEventListener('DOMContentLoaded', () => {
         detailModal.setAttribute('aria-hidden', 'true');
         syncBodyOverflow();
         restoreFocus();
-        detailTrailerIframe.src = '';
+        detailTrailerIframe.src = 'about:blank'; // '' would resolve to this app's own URL and reload the whole page inside the hidden iframe
         detailTrailerWrap.style.display = 'none';
         detailHero.classList.remove('trailer-active');
         trailerVisible = false;
@@ -1618,7 +2472,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (type === 'subtitle' && tracks.length) {
             const off = document.createElement('button');
             off.type = 'button';
-            off.role = 'option';
+            off.setAttribute('role', 'option'); // IDL .role isn't reflected on older TV WebKit
             off.dataset.trackIndex = '-1';
             off.setAttribute('aria-selected', currentIndex < 0 ? 'true' : 'false');
             off.innerHTML = '<span><strong>Off</strong></span><svg class="track-option-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>';
@@ -1635,7 +2489,7 @@ document.addEventListener('DOMContentLoaded', () => {
         tracks.forEach((track, index) => {
             const button = document.createElement('button');
             button.type = 'button';
-            button.role = 'option';
+            button.setAttribute('role', 'option'); // IDL .role isn't reflected on older TV WebKit
             button.dataset.trackIndex = String(index);
             button.setAttribute('aria-selected', index === currentIndex ? 'true' : 'false');
             button.innerHTML = `<span><strong>${escapeHtml(normalizeTrackLabel(track, type === 'audio' ? 'Original' : 'Subtitles', index))}</strong></span><svg class="track-option-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>`;
@@ -1717,7 +2571,7 @@ document.addEventListener('DOMContentLoaded', () => {
         // "Off" button.
         const off = document.createElement('button');
         off.type = 'button';
-        off.role = 'option';
+        off.setAttribute('role', 'option'); // IDL .role isn't reflected on older TV WebKit
         off.dataset.trackIndex = '-1';
         off.dataset.trackSource = 'off';
         const isOff = hlsSubIndex < 0 && activeExternalSubtitleIdx < 0;
@@ -1731,7 +2585,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const activeIdx = activeExternalSubtitleIdx;
             const button = document.createElement('button');
             button.type = 'button';
-            button.role = 'option';
+            button.setAttribute('role', 'option'); // IDL .role isn't reflected on older TV WebKit
             button.dataset.trackIndex = String(index);
             button.dataset.trackSource = 'external';
             const selected = activeIdx === index;
@@ -1746,7 +2600,7 @@ document.addEventListener('DOMContentLoaded', () => {
             playerSubtitleTracks.forEach((track, index) => {
                 const button = document.createElement('button');
                 button.type = 'button';
-                button.role = 'option';
+                button.setAttribute('role', 'option'); // IDL .role isn't reflected on older TV WebKit
                 button.dataset.trackIndex = String(index);
                 button.dataset.trackSource = 'hls';
                 button.setAttribute('aria-selected', index === hlsSubIndex ? 'true' : 'false');
@@ -1971,7 +2825,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         playerLoader.innerHTML = '<div class="player-spinner"></div>';
-        playerLoader.classList.remove('buffering');
+        playerLoader.classList.remove('buffering', 'has-error');
         playerLoader.style.display = 'flex';
         playerModal.classList.remove('player-ready');
         // Remember where focus came from, but only on a fresh open — server
@@ -2546,6 +3400,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 .sort((a, b) => a.season_number - b.season_number);
             if (seasons.length) {
                 launchPlayer(currentPlayerMovie, seasons[0].season_number, 1);
+            } else {
+                showToast('You’ve reached the end of this show');
             }
         } catch (err) {
             console.warn('Could not resolve next episode:', err);
@@ -2557,6 +3413,13 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     playerEpListBtn.addEventListener('click', () => {
+        // Toggle: with the panel raised above the bars (z-60), this same icon
+        // is also the touch target users reach for when dismissing it.
+        if (playerEpPanel.classList.contains('show')) {
+            playerEpPanel.classList.remove('show');
+            playerEpListBtn.setAttribute('aria-expanded', 'false');
+            return;
+        }
         playerEpPanel.classList.add('show');
         playerEpListBtn.setAttribute('aria-expanded', 'true');
         loadPlayerEpisodesPanel();
@@ -2751,9 +3614,17 @@ document.addEventListener('DOMContentLoaded', () => {
                     item.appendChild(img);
                     item.appendChild(info);
 
-                    item.addEventListener('click', () => {
+                    item.setAttribute('role', 'button');
+                    item.setAttribute('tabindex', '0');
+
+                    const playFromPanel = () => {
                         playerEpPanel.classList.remove('show');
+                        playerEpListBtn.setAttribute('aria-expanded', 'false');
                         launchPlayer(currentPlayerMovie, seasonNum, ep.episode_number);
+                    };
+                    item.addEventListener('click', playFromPanel);
+                    item.addEventListener('keydown', e => {
+                        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); playFromPanel(); }
                     });
                     
                     playerEpList.appendChild(item);
@@ -2767,6 +3638,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function showPlayerError(message) {
         playerReady = false;
+        // Re-enable pointer events on the loader (:has() replacement — older
+        // TV WebKit has no :has(), which left Try again unclickable there).
+        playerLoader.classList.add('has-error');
         // Drop both playback states so the error card is visible even when a
         // fatal error strikes after the stream already started ('player-ready'
         // hides the loader) or during a stall (the transparent buffering
@@ -2865,7 +3739,7 @@ document.addEventListener('DOMContentLoaded', () => {
             stopVixPlayback();
             vixPlayer.style.display = 'none';
             playerLoader.innerHTML = '<div class="player-spinner"></div>';
-            playerLoader.classList.remove('buffering');
+            playerLoader.classList.remove('buffering', 'has-error');
             playerLoader.style.display = 'flex';
             resetPlayerUI();
 		playerCloseTimer = null;
@@ -3092,8 +3966,13 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
     }
-    setupSeekZone(playerSeekZoneLeft, playerSeekIndicatorLeft, playerSeekAmountLeft, 'back');
-    setupSeekZone(playerSeekZoneRight, playerSeekIndicatorRight, playerSeekAmountRight, 'forward');
+    // Double-tap-to-seek is a touch gesture. On mouse devices the zones only
+    // added a ~260ms delay to click-to-pause and swallowed double-click
+    // fullscreen over most of the video, so they're never even created there.
+    if (window.matchMedia && window.matchMedia('(hover: none)').matches) {
+        setupSeekZone(playerSeekZoneLeft, playerSeekIndicatorLeft, playerSeekAmountLeft, 'back');
+        setupSeekZone(playerSeekZoneRight, playerSeekIndicatorRight, playerSeekAmountRight, 'forward');
+    }
 
     if (playerVolume) playerVolume.addEventListener('input', () => {
         if (!isHlsServer(activePlayerServer)) return;

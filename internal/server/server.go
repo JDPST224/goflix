@@ -27,8 +27,10 @@ func New(d Deps) http.Handler {
 	mux.HandleFunc("/api/movies", GzipCatalog(d.moviesHandler))
 	mux.HandleFunc("/api/tvshows", GzipCatalog(d.tvShowsHandler))
 	mux.HandleFunc("/api/popular", GzipCatalog(d.popularHandler))
+	mux.HandleFunc("/api/providers", GzipCatalog(d.providersHandler))
 	mux.HandleFunc("/api/health", d.healthHandler)
 	mux.HandleFunc("/api/search", d.searchHandler)
+	mux.HandleFunc("/api/discover", GzipCatalog(d.discoverHandler))
 	mux.HandleFunc("/api/detail", d.detailHandler)
 	mux.HandleFunc("/api/episodes", d.episodesHandler)
 	// Media source resolver routes. VixSrc also keeps its legacy unprefixed

@@ -30,7 +30,7 @@ export function formatPlayerTime(seconds) {
     }
 
 export function isHlsServer(server) {
-        // Both available servers (vixsrc and vidking) use HLS. This helper is
-        // kept for clarity and forward-compatibility if other server types are added.
+        // All three resolvers (vixsrc, vidking, vidlove) stream HLS. Kept for
+        // clarity and forward-compatibility if non-HLS server types are added.
         return server === 'vixsrc' || server === 'vidking' || server === 'vidlove';
     }

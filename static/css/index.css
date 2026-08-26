@@ -147,8 +147,10 @@ body {
     position: fixed;
     top: 0;
     width: 100%;
-    padding: 0 4%;
-    height: 68px;
+    /* viewport-fit=cover extends the page under the notch/status bar — pad
+       the bar's content clear of it (all values are 0 where there's none). */
+    padding: env(safe-area-inset-top) 4% 0;
+    min-height: calc(68px + env(safe-area-inset-top));
     display: flex;
     justify-content: space-between;
     align-items: center;
@@ -851,7 +853,10 @@ body {
     transform: scale(1.10) translateY(-6px);
     z-index: 20;
     transition: transform 0.35s var(--ease-out), z-index 0s 0s;
-    box-shadow: 0 20px 50px rgba(0,0,0,0.85), 0 0 0 1px rgba(255,255,255,0.06);
+    /* Shadow sized to fit the row's 20/28px vertical padding: overflow-y
+       computes to auto next to overflow-x:auto, so a larger blur/offset gets
+       hard-clipped into a visible horizontal line. */
+    box-shadow: 0 12px 26px rgba(0,0,0,0.85), 0 0 0 1px rgba(255,255,255,0.06);
 }
 
 /* Edge cards expand inward */
@@ -1299,6 +1304,8 @@ body {
     font-size: 0.97rem;
     color: var(--text-secondary);
     line-height: 1.78;
+    /* Full modal width made lines too long to read comfortably. */
+    max-width: 68ch;
 }
 
 /* ── Sections (Cast, Episodes, Related) ─────────────────────── */
@@ -1393,42 +1400,36 @@ body {
     flex-wrap: wrap;
 }
 
-.detail-season-select-wrap {
-    position: relative;
-    display: flex;
-    align-items: center;
-}
-
-.detail-season-select-wrap svg {
-    position: absolute;
-    right: 10px;
-    pointer-events: none;
-    color: var(--text-secondary);
-}
-
-.detail-season-select {
-    appearance: none;
-    -webkit-appearance: none;
+/* Season selector: reuses the same dark dropdown component as the "Only on …"
+   and "Genres" pickers (custom-styled menu instead of the browser's native
+   <select> popup, which broke the app's dark theme and looked inconsistent
+   across browsers/mobile), sized down to sit as a compact control inline
+   with the episode search box. */
+.season-picker-trigger,
+.provider-trigger.season-picker-trigger {
     background: rgba(255,255,255,0.06);
     border: 1.5px solid rgba(255,255,255,0.12);
     color: #fff;
     font-family: var(--font-body);
     font-size: 0.85rem;
     font-weight: 600;
-    padding: 8px 34px 8px 14px;
+    padding: 8px 14px;
     border-radius: var(--radius-md);
-    cursor: pointer;
-    outline: none;
+    gap: 10px;
     transition: border-color 0.2s, background 0.2s;
     min-width: 120px;
+    justify-content: space-between;
 }
 
-.detail-season-select:hover, .detail-season-select:focus {
+.season-picker-trigger:hover,
+.season-picker.open .provider-trigger.season-picker-trigger {
     border-color: rgba(255,255,255,0.28);
     background: rgba(255,255,255,0.09);
 }
 
-.detail-season-select option { background: #1c1c28; color: #fff; }
+.season-picker-trigger span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.provider-menu.season-picker-menu { width: 200px; }
 
 .detail-ep-search-wrap {
     position: relative;
@@ -1468,7 +1469,12 @@ body {
     scrollbar-width: thin;
     scrollbar-color: rgba(255,255,255,0.1) transparent;
     padding-right: 4px;
-    /* Fade out at bottom to hint at more content */
+}
+
+/* Bottom fade hinting at more content — only when the list actually
+   overflows (toggled in renderEpisodeList), else short lists render their
+   last item faded for no reason. */
+.detail-episode-list.scrollable {
     -webkit-mask-image: linear-gradient(to bottom, black 80%, transparent 100%);
     mask-image: linear-gradient(to bottom, black 80%, transparent 100%);
 }
@@ -1592,6 +1598,17 @@ body {
 }
 
 /* ── Related content row ─────────────────────────────────────── */
+
+/* Reuses the same .row-edge-arrow look/behavior as the home carousels,
+   just scoped to its own hover trigger since this wrapper isn't a .row. */
+.detail-related-scroll-wrap {
+    position: relative;
+}
+
+.detail-related-scroll-wrap:hover .row-edge-arrow {
+    opacity: 1;
+    pointer-events: auto;
+}
 
 .detail-related-row {
     display: flex;
@@ -1733,6 +1750,11 @@ body {
 
 .player-modal > .player-center-play,
 .player-modal > .player-ep-panel { z-index: 30; }
+
+/* An open episode panel must rise above the control bars (z-50): on ≤768px
+   the top bar's icon-only Episodes button sits directly over the panel
+   header's close ✕, which made the panel impossible to dismiss by touch. */
+.player-modal > .player-ep-panel.show { z-index: 60; }
 
 /* The fullscreen loader (z-40, opaque black) must never cover the bars:
    while the source resolves or an error card is up, Back / server switching
@@ -1952,6 +1974,13 @@ body {
        control bars only where those bars are actually drawn (handled by
        z-index) so a tap that lands on a button always wins. */
     .player-seek-zone { width: 42%; }
+}
+
+@media (hover: hover) {
+    /* Zones aren't initialized on mouse devices (see setupSeekZone in
+       main.js); keep the empty buttons out of hit-testing there regardless,
+       so clicks land on the video directly. */
+    .player-seek-zone { display: none; }
 }
 
 /* ── Bottom bar ─────────────────────────────────────────────── */
@@ -2449,7 +2478,9 @@ button[aria-selected="true"] .server-option-check,
     background: transparent;
 }
 
-.player-loader:has(.player-error) { pointer-events: auto; }
+/* Toggled by showPlayerError() — :has() is unavailable on older TV WebKit,
+   which left the error card's Try again button unclickable there. */
+.player-loader.has-error { pointer-events: auto; }
 
 @keyframes spin { to { transform: rotate(360deg); } }
 
@@ -2695,12 +2726,12 @@ footer {
 /* ── Responsive ─────────────────────────────────────────────── */
 
 @media (max-width: 768px) {
-    #navbar { padding: 0 4%; min-height: 60px; background: rgba(20,20,20,0.9); backdrop-filter: blur(12px); }
+    #navbar { padding: env(safe-area-inset-top) 4% 0; min-height: calc(60px + env(safe-area-inset-top)); background: rgba(20,20,20,0.9); backdrop-filter: blur(12px); }
     .nav-content { gap: 0; }
     .mobile-nav-toggle { display: inline-flex; align-items: center; justify-content: center; }
     .nav-links {
         position: fixed;
-        top: 60px; left: 10px; right: 10px;
+        top: calc(60px + env(safe-area-inset-top)); left: 10px; right: 10px;
         display: grid;
         gap: 2px;
         padding: 8px;
@@ -2721,8 +2752,14 @@ footer {
     .profile-wrap { display: none; }
     .nav-actions { gap: 4px; }
 
-    #hero { padding: 0 4% 64px; height: 80vh; }
+    /* Bottom padding must exceed #carousels-container's -80px pull-up, or the
+       first row header lands on top of the hero buttons (64px wasn't enough).
+       Also keeps the genre-filter bar clear on Movies/TV Shows pages. */
+    #hero { padding: 0 4% 96px; height: 80vh; }
     .hero-content h2 { font-size: 2rem; }
+    /* Rotation dots sit above the pulled-up rows instead of behind the
+       first poster strip. */
+    .hero-dots { bottom: 96px; }
 
     #carousels-container { padding: 0 4% 48px; }
 
@@ -2738,7 +2775,17 @@ footer {
     .top10-rank { font-size: 7rem; margin-right: -8px; -webkit-text-stroke-width: 1.5px; }
     .row-top10 { --top10-poster-w: 116px; }
     .row-top10 .poster { height: 174px; }
+    /* .genre-grid / .genre-grid-title / #provider-row-slot sizing for this
+       breakpoint lives at the end of the file — their base rules are defined
+       later, and equal-specificity overrides here never won. */
     .poster-remove-btn { opacity: 1; width: 32px; height: 32px; }
+
+    /* Smaller rotation dots, dropped into the gap between the hero buttons
+       and the pulled-up rows so they can't crowd More Info on narrow screens
+       (.hero-dot's base rule is defined earlier, so this override applies). */
+    .hero-dots { bottom: 88px; }
+    .hero-dot { width: 8px; height: 2px; }
+    .hero-dot.active { width: 14px; }
 
     .search-results-grid { grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 10px; }
 
@@ -2775,7 +2822,9 @@ footer {
     .top10-rank { font-size: 5.5rem; margin-right: -6px; -webkit-text-stroke-width: 1.2px; }
     .row-top10 { --top10-poster-w: 96px; }
     .row-top10 .poster { height: 144px; }
-    .btn-ghost { display: none; }
+    /* Hero-only slimming — a bare .btn-ghost rule also hid the detail
+       modal's Trailer button, making trailers unwatchable on small phones. */
+    #hero .btn-ghost { display: none; }
     .search-results-grid { grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 8px; }
     .episode-still-wrap { flex: 0 0 80px; }
     .episode-num-badge { display: none; }
@@ -2826,7 +2875,41 @@ footer {
 
 @media (hover: none) {
     .row-explore-all { display: none; }
+    /* The provider/genre rows' Explore All opens the paginated grid — a real
+       destination, so it stays visible on touch where hover never fires. */
+    .explore-all-static { display: inline-flex; opacity: 1; transform: none; }
 }
+
+/* Static variant is always visible: it's the only way into its grid. */
+.explore-all-static { opacity: 1; transform: none; }
+
+/* ── Provider Explore-All grid header (Home) ────────────────── */
+
+.provider-grid-header {
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    margin-bottom: 14px;
+    padding: 0 2px;
+}
+
+.grid-back-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: rgba(255,255,255,0.08);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 6px;
+    color: var(--text);
+    font-family: var(--font-display);
+    font-size: 0.85rem;
+    font-weight: 600;
+    padding: 6px 12px;
+    cursor: pointer;
+    transition: background 0.15s ease;
+}
+
+.grid-back-btn:hover { background: rgba(255,255,255,0.15); }
 
 /* ── Poster hover overlay extras (meta, genres) ─────────────── */
 
@@ -2877,3 +2960,257 @@ footer {
 }
 
 .hero-anim { animation: heroFadeUp 0.65s var(--ease-out) both; }
+
+/* ── Genre pill-chip filter (Movies & TV Shows pages) ───────────── */
+
+.genre-filter-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    overflow-x: auto;
+    scrollbar-width: none;
+    padding: 0 4% 18px;
+    position: relative;
+    z-index: 4;
+    /* Pulls the bar up onto the hero, taking over the role #carousels-container's
+       own -80px margin normally plays — needed because the bar sits directly
+       after the hero on Movies/TV Shows pages. Harmless while display:none. */
+    margin-top: -80px;
+}
+
+/* When the bar is present, carousels-container must sit in normal flow
+   right after it — otherwise its own -80px margin re-pulls it up over the
+   bar instead of the hero, causing the two to overlap. */
+#carousels-container.with-genre-bar {
+    margin-top: 0;
+}
+
+.genre-filter-bar::-webkit-scrollbar { display: none; }
+
+.genre-chip {
+    flex: 0 0 auto;
+    font-family: var(--font-body);
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: rgba(255,255,255,0.85);
+    background: rgba(255,255,255,0.08);
+    border: 1px solid rgba(255,255,255,0.15);
+    border-radius: 20px;
+    padding: 7px 16px;
+    cursor: pointer;
+    transition: background 0.2s, border-color 0.2s, color 0.2s;
+}
+
+.genre-chip:hover {
+    background: rgba(255,255,255,0.16);
+}
+
+.genre-chip.active {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+}
+
+.no-titles-notice {
+    color: var(--text-secondary);
+    font-size: 0.95rem;
+    padding: 40px 2px;
+    text-align: center;
+}
+
+/* ── Genre-filtered grid (replaces the carousel when a chip is active) ── */
+
+.genre-grid-section {
+    margin-bottom: 48px;
+}
+
+.genre-grid-title {
+    font-family: var(--font-display);
+    font-size: 1.3rem;
+    font-weight: 700;
+    letter-spacing: 0.2px;
+    color: var(--text);
+    margin-bottom: 14px;
+    padding: 0 2px;
+}
+
+.genre-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(188px, 1fr));
+    gap: 28px 12px;
+    padding: 4px 2px 12px;
+}
+
+/* Grid cells are fluid, so the fixed-size card must fill its cell —
+   otherwise leftover row width (container width isn't an exact multiple of
+   card + gap) leaves an uneven gap on the right edge instead of being
+   shared evenly across every column, which is what made the grid look
+   asymmetric. Mirrors the same fix already used for .search-results-grid. */
+.genre-grid .poster-card { width: 100%; }
+.genre-grid .poster { height: auto; aspect-ratio: 2 / 3; }
+
+.genre-grid-sentinel {
+    height: 1px;
+}
+
+/* Inline "fetching the next discover page" indicator shown just above the
+   sentinel while the grid appends server results. */
+.genre-grid-loading {
+    width: 28px;
+    height: 28px;
+    margin: 18px auto 6px;
+    border: 3px solid rgba(255,255,255,0.08);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+}
+
+/* ── "Only on …" provider dropdown (Home carousel) ───────────────── */
+
+/* Reserved Home slot for the async provider carousel: while empty it
+   collapses, and every row below visibly jumps when it lands. Hold roughly
+   a row's height per breakpoint until content arrives (:empty stops matching
+   the moment the row is appended). */
+#provider-row-slot:empty { min-height: 400px; }
+
+.provider-picker {
+    position: relative;
+}
+
+.provider-trigger {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: transparent;
+    border: 0;
+    padding: 0;
+    color: inherit;
+    cursor: pointer;
+}
+
+.provider-trigger h3 { margin: 0; }
+
+.provider-chevron {
+    color: var(--text-secondary);
+    transition: transform 0.2s, color 0.2s;
+}
+
+.provider-picker.open .provider-chevron {
+    transform: rotate(180deg);
+    color: var(--accent);
+}
+
+.provider-menu {
+    position: absolute;
+    top: calc(100% + 10px);
+    left: 0;
+    width: 230px;
+    max-height: 320px;
+    overflow: auto;
+    padding: 6px;
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: var(--radius-lg);
+    background: rgba(16,16,18,0.99);
+    backdrop-filter: blur(20px);
+    opacity: 0;
+    visibility: hidden;
+    transform: translateY(-6px) scale(0.97);
+    transform-origin: top left;
+    transition: 0.18s var(--ease-out);
+    z-index: 30;
+}
+
+.provider-picker.open .provider-menu {
+    opacity: 1;
+    visibility: visible;
+    transform: none;
+}
+
+.provider-option {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 12px;
+    border: 0;
+    border-radius: var(--radius-md);
+    background: transparent;
+    color: #fff;
+    font-family: var(--font-body);
+    font-size: 0.88rem;
+    font-weight: 600;
+    text-align: left;
+    cursor: pointer;
+}
+
+.provider-option:hover { background: rgba(255,255,255,0.08); }
+
+.provider-option[aria-selected="true"] {
+    background: rgba(229,9,20,0.1);
+    color: var(--accent);
+}
+
+/* App-icon style badges (rounded square, subtle gloss + depth) instead of
+   plain flat-color letter circles — reads more like each service's actual
+   icon at a glance while staying original artwork (no logo reproduction). */
+.provider-badge {
+    width: 30px;
+    height: 30px;
+    border-radius: 9px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: var(--font-display);
+    font-size: 0.72rem;
+    font-weight: 800;
+    letter-spacing: -0.4px;
+    color: #fff;
+    flex-shrink: 0;
+    position: relative;
+    overflow: hidden;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.35);
+    box-shadow: 0 2px 5px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.18);
+}
+
+/* Glossy top highlight, shared by every badge. */
+.provider-badge::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(to bottom, rgba(255,255,255,0.16) 0%, transparent 55%);
+    pointer-events: none;
+}
+
+.provider-badge svg { position: relative; z-index: 1; }
+
+.badge-netflix   { background: linear-gradient(160deg, #3d3d3d 0%, #050505 100%); }
+.badge-prime     { background: linear-gradient(160deg, #29c1ff 0%, #0073a8 100%); }
+.badge-max       { background: linear-gradient(160deg, #3d3d3d 0%, #050505 100%); border: 1px solid rgba(255,255,255,0.2); font-style: italic; }
+.badge-disney    { background: linear-gradient(160deg, #2b52ff 0%, #0a1b7a 100%); font-size: 0.58rem; }
+.badge-apple     { background: #ffffff; border: 1px solid rgba(255,255,255,0.2); }
+.badge-paramount { background: linear-gradient(160deg, #2f9bff 0%, #0047b3 100%); font-size: 0.6rem; }
+.badge-hulu      { background: linear-gradient(160deg, #3ef0a0 0%, #0ec26b 100%); color: #052914; text-shadow: none; }
+
+/* ── Responsive overrides for late-defined components ────────────── */
+/* The main responsive blocks sit BEFORE these components' base rules, so
+   equal-specificity overrides placed there never won — the grid stayed on
+   its 188px desktop tracks on phones (one narrow column). Any override for
+   .genre-grid / .genre-grid-title / #provider-row-slot belongs down here. */
+
+@media (max-width: 768px) {
+    /* Fluid (minmax .. 1fr) tracks instead of a fixed-then-left-aligned grid:
+       fixed 140px tracks with justify-content:start (the previous approach)
+       left whatever width didn't divide evenly into 140px+gap stranded as
+       one dead strip on the right, so the grid never quite lined up with
+       the edges above/below it. 1fr tracks share that leftover width across
+       every column instead, so both edges stay flush. */
+    .genre-grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 22px 10px; }
+    .genre-grid-title { font-size: 1.1rem; }
+    #provider-row-slot:empty { min-height: 300px; }
+}
+
+@media (max-width: 480px) {
+    /* Tracks shrink with the cards so columns stay tight on small phones. */
+    .genre-grid { grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); }
+    #provider-row-slot:empty { min-height: 250px; }
+}

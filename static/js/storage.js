@@ -30,7 +30,9 @@ export function getMyList() {
         }
     }
 export function saveMyList(list) {
-        localStorage.setItem('goflix_mylist', JSON.stringify(list));
+        try {
+            localStorage.setItem('goflix_mylist', JSON.stringify(list));
+        } catch (e) { console.warn('Could not save My List:', e); }
     }
 export function isInMyList(movie) {
         const key = mediaKey(movie);

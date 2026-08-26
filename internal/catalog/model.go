@@ -47,6 +47,23 @@ var tmdbGenres = map[int]string{
 	10759: "Action & Adventure", 10762: "Kids", 10763: "News", 10764: "Reality", 10765: "Sci-Fi & Fantasy", 10766: "Soap", 10767: "Talk", 10768: "War & Politics",
 }
 
+// genreIDByName reverses tmdbGenres so the discover endpoint can resolve the
+// same display names the frontend's genre chips are built from. Names are
+// unique across the merged movie+TV sets, so one map serves both.
+var genreIDByName = func() map[string]int {
+	m := make(map[string]int, len(tmdbGenres))
+	for id, name := range tmdbGenres {
+		m[name] = id
+	}
+	return m
+}()
+
+// GenreID reverse-maps a display genre name to its TMDB genre ID.
+func GenreID(name string) (int, bool) {
+	id, ok := genreIDByName[name]
+	return id, ok
+}
+
 // MapTMDBMovie converts a TMDB result into a catalog Movie, returning nil for
 // entries without both a title and a poster. Title falls back
 // Title → OriginalTitle → Name; the banner prefers the original backdrop and

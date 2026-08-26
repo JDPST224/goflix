@@ -3,7 +3,8 @@
 
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="theme-color" content="#141414">
     <link rel="icon"
         href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%23e50914'/%3E%3Ctext x='32' y='45' font-family='Arial, sans-serif' font-size='38' font-weight='900' fill='%23ffffff' text-anchor='middle'%3EG%3C/text%3E%3C/svg%3E">
     <title>GoFlix - Watch Movies &amp; TV Shows</title>
@@ -186,6 +187,10 @@
         <div id="hero-dots" class="hero-dots"></div>
     </header>
 
+    <!-- Genre pill-chip filter (Movies & TV Shows pages only) -->
+    <div id="genre-filter-bar" class="genre-filter-bar" role="toolbar"
+         aria-label="Filter by genre" style="display:none"></div>
+
     <!-- Carousels Container -->
     <main id="carousels-container" tabindex="-1">
         <!-- Dynamically injected rows go here -->
@@ -294,14 +299,18 @@
                 <div class="detail-episodes-header">
                     <h4 class="detail-section-title">Episodes</h4>
                     <div class="detail-episodes-controls">
-                        <div class="detail-season-select-wrap">
-                            <select id="detail-season-select" class="detail-season-select"
-                                aria-label="Select season"></select>
-                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24"
-                                fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"
-                                stroke-linejoin="round">
-                                <polyline points="6 9 12 15 18 9"></polyline>
-                            </svg>
+                        <div class="provider-picker season-picker" id="detail-season-picker">
+                            <button type="button" class="provider-trigger season-picker-trigger" id="detail-season-trigger"
+                                aria-haspopup="listbox" aria-expanded="false" aria-label="Select season">
+                                <span id="detail-season-current">Season 1</span>
+                                <svg class="provider-chevron" xmlns="http://www.w3.org/2000/svg" width="14" height="14"
+                                    viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
+                                    stroke-linecap="round" stroke-linejoin="round">
+                                    <polyline points="6 9 12 15 18 9"></polyline>
+                                </svg>
+                            </button>
+                            <div class="provider-menu season-picker-menu" id="detail-season-menu" role="listbox"
+                                aria-label="Choose season"></div>
                         </div>
                         <div class="detail-ep-search-wrap">
                             <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24"
@@ -325,7 +334,15 @@
             <!-- Related content -->
             <div class="detail-section" id="detail-related-section" style="display:none">
                 <h4 class="detail-section-title">More Like This</h4>
-                <div class="detail-related-row" id="detail-related-row"></div>
+                <div class="detail-related-scroll-wrap" id="detail-related-scroll-wrap">
+                    <button class="row-edge-arrow row-edge-arrow-left" id="detail-related-scroll-left" aria-label="Scroll left" type="button">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="15 18 9 12 15 6"></polyline></svg>
+                    </button>
+                    <div class="detail-related-row" id="detail-related-row"></div>
+                    <button class="row-edge-arrow row-edge-arrow-right" id="detail-related-scroll-right" aria-label="Scroll right" type="button">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="9 18 15 12 9 6"></polyline></svg>
+                    </button>
+                </div>
             </div>
 
         </div>
