@@ -2427,12 +2427,56 @@ document.addEventListener('DOMContentLoaded', () => {
         return track?.default === true || track?.default === 'YES' || attrs.DEFAULT === 'YES' || track?.autoselect === true || attrs.AUTOSELECT === 'YES';
     }
 
+    function isDescriptiveTrack(track) {
+        const attrs = track?.attrs || {};
+        const str = (String(track?.name || '') + ' ' + String(attrs.NAME || '') + ' ' + String(attrs.CHARACTERISTICS || '')).toLowerCase();
+        return str.includes('descriptive') || str.includes('description') || str.includes('commentary') || str.includes('describes-video');
+    }
+
+    function scoreAudioTrack(track) {
+        let score = 0;
+        const attrs = track?.attrs || {};
+        const name = (String(track?.name || '') + ' ' + String(attrs.NAME || '')).toLowerCase();
+        const lang = (String(track?.lang || '') + ' ' + String(attrs.LANGUAGE || '')).toLowerCase();
+
+        const isEn = /(^|[-_])en(g|us|gb|ca|au)?([_-]|$)/i.test(lang) || /english/.test(name) || /english/.test(lang);
+        if (isEn) score += 1000;
+        if (isDefaultTrack(track)) score += 100;
+        if (name.includes('original')) score += 50;
+
+        // Surround / multi-channel audio (5.1, 7.1, Atmos) gets high priority
+        const channels = parseInt(track?.channels || attrs.CHANNELS || '2', 10);
+        if (channels >= 6 || name.includes('5.1') || name.includes('surround') || name.includes('atmos')) {
+            score += 300;
+        } else if (channels >= 2) {
+            score += 50;
+        }
+
+        // Codecs: Dolby Digital Plus (e-ac-3) / AC-3 / DTS
+        const codec = String(track?.audioCodec || '').toLowerCase();
+        if (codec.includes('ec-3') || codec.includes('ac-3') || name.includes('dolby') || name.includes('dts')) {
+            score += 150;
+        }
+
+        // Penalize audio description / commentary
+        if (isDescriptiveTrack(track)) {
+            score -= 500;
+        }
+        return score;
+    }
+
     function chooseDefaultAudioIndex(tracks) {
         if (!tracks.length) return -1;
-        const english = tracks.findIndex(isEnglishTrack);
-        if (english >= 0) return english;
-        const preferred = tracks.findIndex(isDefaultTrack);
-        return preferred >= 0 ? preferred : 0;
+        let bestIdx = 0;
+        let bestScore = -Infinity;
+        for (let i = 0; i < tracks.length; i++) {
+            const s = scoreAudioTrack(tracks[i]);
+            if (s > bestScore) {
+                bestScore = s;
+                bestIdx = i;
+            }
+        }
+        return bestIdx;
     }
 
     function chooseDefaultSubtitleIndex(tracks) {
@@ -3193,27 +3237,22 @@ document.addEventListener('DOMContentLoaded', () => {
                 // top tier and rebufferring while a shallow buffer outgrows
                 // the stalls.
                 const host = location.hostname.toLowerCase();
-                const localPlayback = host === 'localhost' || host === '::1' ||
-                    /^127\./.test(host) || /^10\./.test(host) ||
-                    /^192\.168\./.test(host) || /^172\.(1[6-9]|2\d|3[01])\./.test(host);
+                // High-performance ABR & buffer configuration:
+                // Set initial bandwidth estimate to 10 Mbps (10,000,000) so streams start immediately
+                // at the top quality tier (4K 2160p / 1080p FHD) without initial blurriness.
+                // startLevel is set to the top tier, while keeping hls.js in automatic ABR mode
+                // so it can dynamically scale down if network conditions demand.
                 vixHlsInstance = new Hls({
                     enableWorker: true,
                     lowLatencyMode: false,
                     capLevelToPlayerSize: false,
                     renderTextTracksNatively: true,
                     autoStartLoad: true,
-                    startLevel: localPlayback ? 999 : -1,
-                    // Local profile biases toward the top tier: require less
-                    // headroom before claiming a higher variant (hls.js
-                    // defaults: 0.95 down-guard / 0.7 up-switch) and assume a
-                    // healthier starting estimate. All variants stay in the
-                    // manifest either way, so ABR always has headroom.
-                    abrEwmaDefaultEstimate: localPlayback ? 2000000 : 1000000,
-                    abrBandWidthFactor: localPlayback ? 1.0 : 0.95,
-                    abrBandWidthUpFactor: localPlayback ? 0.9 : 0.7,
+                    startLevel: 999,
+                    abrEwmaDefaultEstimate: 10000000,
+                    abrBandWidthFactor: 1.0,
+                    abrBandWidthUpFactor: 0.9,
                     // Buffer optimization for buffer-free 4K UHD & 1080p playback.
-                    // 120s forward buffer rides out upstream dips; RAM use is
-                    // bounded by maxBufferSize below.
                     maxBufferLength: 120,
                     maxMaxBufferLength: 240,
                     maxBufferSize: 256 * 1024 * 1024,
@@ -3225,9 +3264,6 @@ document.addEventListener('DOMContentLoaded', () => {
                     fragLoadingMaxRetry: 6,
                     fragLoadingRetryDelay: 500,
                     backBufferLength: 60,
-                    // NOTE: `progressive` is intentionally disabled — streaming
-                    // fragment parsing through the media proxy caused
-                    // fragParsingError failures with some providers.
                     xhrSetup: function(xhr) {
                         xhr.withCredentials = false;
                     }
@@ -3235,10 +3271,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 vixHlsInstance.on(Hls.Events.MANIFEST_PARSED, function(event, data) {
                     if (requestId !== playerRequestId) return;
-                    // Local playback: start on the highest available quality
-                    // (4K 2160p, 1080p, or max bitrate). Remote playback leaves
-                    // startLevel at -1 so ABR picks from its own estimate.
-                    if (localPlayback && data.levels && data.levels.length > 0) {
+                    // Start on the highest available quality (4K 2160p, 1080p, or max bitrate).
+                    if (data.levels && data.levels.length > 0) {
                         let highestLevelIndex = 0;
                         let maxScore = -1;
                         for (let i = 0; i < data.levels.length; i++) {

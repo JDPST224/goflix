@@ -158,26 +158,89 @@ Test suites included in `debug/`:
 
 ### Upstream Bandwidth Testing
 
-GoFlix includes a standalone bandwidth tester in `internal/mediaresolver/bandwidth_test.go` to benchmark upstream media servers. It measures the resolve time, TCP ping, TTFB, and download bandwidth (Mbps) for each provider server:
+GoFlix includes a built-in upstream benchmark suite in `internal/mediaresolver/bandwidth_test.go` to probe and test the actual performance of upstream streaming servers. It walks each provider's real resolution chain, pings the edge CDN, measures Time-to-First-Byte (TTFB), and downloads real video segments to measure sustained throughput (Mbps).
 
-```bash
-go test -v -run TestBandwidth ./internal/mediaresolver -timeout 20m
+#### Quick Test (All Providers)
+
+Run the full benchmark across all configured servers:
+
+* **Linux / macOS (Bash):**
+  ```bash
+  go test -v -count=1 -run TestBandwidth ./internal/mediaresolver -timeout 20m
+  ```
+
+* **Windows (PowerShell):**
+  ```powershell
+  go test -v -count=1 -run TestBandwidth ./internal/mediaresolver -timeout 20m
+  ```
+
+* **Windows (CMD):**
+  ```cmd
+  go test -v -count=1 -run TestBandwidth ./internal/mediaresolver -timeout 20m
+  ```
+
+#### Configuration Environment Variables
+
+You can customize the probe target and test scope using environment variables:
+
+| Variable | Default | Description |
+| :--- | :--- | :--- |
+| `BW_PROVIDERS` | *all* | Comma-separated list of providers to test: `vixsrc`, `vidking`, `vidlove`, `vidsrcme` |
+| `BW_TYPE` | `movie` | Media type: `movie` or `tv` |
+| `BW_ID` | `27205` | TMDB ID (e.g. `550` for *Fight Club*, `1396` for *Breaking Bad*, `27205` for *Inception*) |
+| `BW_SEASON` | `1` | TV show season number (when `BW_TYPE=tv`) |
+| `BW_EPISODE` | `1` | TV show episode number (when `BW_TYPE=tv`) |
+
+#### Usage Examples
+
+**1. Test a Single Provider (e.g. VixSrc):**
+
+* **Linux / macOS:**
+  ```bash
+  BW_PROVIDERS=vixsrc BW_TYPE=movie BW_ID=550 go test -v -count=1 -run TestBandwidth ./internal/mediaresolver -timeout 3m
+  ```
+* **Windows (PowerShell):**
+  ```powershell
+  $env:BW_PROVIDERS="vixsrc"; $env:BW_TYPE="movie"; $env:BW_ID="550"; go test -v -count=1 -run TestBandwidth ./internal/mediaresolver -timeout 3m
+  ```
+
+**2. Test a TV Show Episode (e.g. Breaking Bad S01E01 on VidKing and VidSrcMe):**
+
+* **Linux / macOS:**
+  ```bash
+  BW_PROVIDERS=vidking,vidsrcme BW_TYPE=tv BW_ID=1396 BW_SEASON=1 BW_EPISODE=1 go test -v -count=1 -run TestBandwidth ./internal/mediaresolver -timeout 5m
+  ```
+* **Windows (PowerShell):**
+  ```powershell
+  $env:BW_PROVIDERS="vidking,vidsrcme"; $env:BW_TYPE="tv"; $env:BW_ID="1396"; $env:BW_SEASON="1"; $env:BW_EPISODE="1"; go test -v -count=1 -run TestBandwidth ./internal/mediaresolver -timeout 5m
+  ```
+
+#### Understanding the Benchmark Report
+
+At the end of the test, GoFlix prints a tabular performance summary:
+
+```text
+=== Upstream server bandwidth report ===
+SERVER           TIER       CDN HOST            RESOLVED ms  PING ms  TTFB ms  BANDWIDTH Mbps  SEGS  MB
+vidking/YORU     1080p      moon.peakstorm.top  11160        67       784      44.9            4     13.65
+vidsrcme         1920x800   comityofcognomen.site 2133       55       98       42.3            4     4.78
+vidlove/vidapi   1920x800   a2.shows.st         404          168      400      23.7            4     4.78
+vixsrc           1920x1080  vixsrc.to           1529         152      928      4.4             2     2.18
+
+Fastest upstream: vidking/YORU at 44.9 Mbit/s (single sequential connection)
 ```
 
-Optional environment variables for customizing the test:
-- `BW_PROVIDERS` — test a comma-separated subset (e.g., `vixsrc,vidking,vidlove,vidsrcme`)
-- `BW_TYPE` — test a specific media type (`movie` or `tv`)
-- `BW_ID` — test a specific TMDB ID (default is `27205` for Inception)
-- `BW_SEASON` and `BW_EPISODE` — test specific TV show episodes
+* **SERVER**: The provider and specific sub-server probed (e.g. VidKing sub-servers like `YORU`, `BREACH`, etc.).
+* **TIER**: The stream resolution chosen (`2160p`, `1080p`, `1920x1080`, `auto`).
+* **CDN HOST**: The edge CDN host serving the media segments.
+* **RESOLVED ms**: Time in milliseconds to complete direct API resolution and extract the manifest.
+* **PING ms**: Network TCP handshake RTT to the media CDN edge node.
+* **TTFB ms**: Time to first byte when requesting segment chunks.
+* **BANDWIDTH Mbps**: Sustained download speed over a single sequential connection. Note that GoFlix runs 5–8 parallel prefetch workers, so total available pipeline bandwidth is typically 4x–5x higher than this single-stream metric.
+* **SEGS / MB**: Number of real media chunks downloaded and total data transferred.
 
-Example testing a specific TV show episode on a subset of providers:
-
-```bash
-BW_PROVIDERS=vidking,vidlove,vidsrcme BW_TYPE=tv BW_ID=1399 BW_SEASON=1 BW_EPISODE=1 go test -v -run TestBandwidth ./internal/mediaresolver -timeout 20m
-```
-
-
-> **Note:** Go caches successful test results. Add `-count=1` to force a fresh run (e.g., `go test -count=1 -v ...`), or run `go clean -testcache` to clear the cache globally.
+> [!TIP]
+> Go caches successful test results by default. Always include `-count=1` to ensure a live, real-time benchmark run, or run `go clean -testcache` to reset the test cache.
 
 
 
