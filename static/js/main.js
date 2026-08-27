@@ -2318,7 +2318,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // deduplicating by language/label.
     async function fetchExternalSubtitles(movie, season, episode, provider) {
         if (!movie || !movie.id) return [];
-        const supportedProviders = ['vidking', 'vidlove', 'vidsrcme'];
+        const supportedProviders = ['cinesrc', 'vidking', 'vidlove', 'vidsrcme'];
         if (!supportedProviders.includes(provider)) {
             return [];
         }
@@ -2890,7 +2890,7 @@ document.addEventListener('DOMContentLoaded', () => {
         restoreSavedVolume();
         vixPlayer.style.display = 'block';
 
-        const provider = server === 'vidking' ? 'vidking' : (server === 'vidlove' ? 'vidlove' : (server === 'vidsrcme' ? 'vidsrcme' : 'vixsrc'));
+        const provider = server === 'cinesrc' ? 'cinesrc' : (server === 'vidking' ? 'vidking' : (server === 'vidlove' ? 'vidlove' : (server === 'vidsrcme' ? 'vidsrcme' : 'vixsrc')));
 
         // Fire External subtitle fetch in parallel with HLS source resolution for the selected provider
         let externalPromise = fetchExternalSubtitles(movie, currentPlayerSeason, currentPlayerEpisode, provider);

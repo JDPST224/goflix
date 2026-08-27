@@ -526,6 +526,7 @@
                             <span class="player-sr-only" id="player-server-current">VidKing</span>
                         </button>
                         <select id="player-server-select" class="player-native-select" aria-hidden="true" tabindex="-1">
+                            <option value="cinesrc">CineSrc</option>
                             <option value="vidking" selected>VidKing</option>
                             <option value="vidlove">VidLove</option>
                             <option value="vidsrcme">VidSrcMe</option>
@@ -533,6 +534,12 @@
                         </select>
                         <div class="player-server-menu" id="player-server-menu" role="listbox"
                             aria-label="Playback server">
+                            <button type="button" role="option" data-server="cinesrc" aria-selected="false"><span
+                                    class="server-option-dot"></span><span><strong>CineSrc</strong><small>Direct
+                                        Stream (1080p HD)</small></span><svg class="server-option-check"
+                                    viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                                    <polyline points="20 6 9 17 4 12"></polyline>
+                                </svg></button>
                             <button type="button" role="option" data-server="vidking" aria-selected="true"><span
                                     class="server-option-dot"></span><span><strong>VidKing</strong><small>Highest
                                         Quality (4K / 1080p HD)</small></span><svg class="server-option-check"

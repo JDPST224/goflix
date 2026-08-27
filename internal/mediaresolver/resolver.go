@@ -36,7 +36,7 @@ type hlsCandidate struct {
 }
 
 type Config struct {
-	TargetOrigin, VidKingOrigin, VidLoveOrigin, VidsrcmeOrigin, VidsrcmeDataOrigin string
+	TargetOrigin, VidKingOrigin, VidLoveOrigin, VidsrcmeOrigin, VidsrcmeDataOrigin, CineSrcOrigin string
 	BrowserHeadless                                                                bool
 	BrowserTimeout, SourceResolutionTimeout    time.Duration
 	MaxBrowserSessions                         int
@@ -183,15 +183,19 @@ func New(cfg Config) (*Resolver, error) {
 	if cfg.VidsrcmeDataOrigin == "" {
 		cfg.VidsrcmeDataOrigin = "https://data.vidsrcme.ru"
 	}
+	if cfg.CineSrcOrigin == "" {
+		cfg.CineSrcOrigin = "https://cinesrc.st"
+	}
 	cfg.TargetOrigin = strings.TrimRight(cfg.TargetOrigin, "/")
 	cfg.VidKingOrigin = strings.TrimRight(cfg.VidKingOrigin, "/")
 	cfg.VidLoveOrigin = strings.TrimRight(cfg.VidLoveOrigin, "/")
 	cfg.VidsrcmeOrigin = strings.TrimRight(cfg.VidsrcmeOrigin, "/")
 	cfg.VidsrcmeDataOrigin = strings.TrimRight(cfg.VidsrcmeDataOrigin, "/")
+	cfg.CineSrcOrigin = strings.TrimRight(cfg.CineSrcOrigin, "/")
 	for k, v := range map[string]string{
 		"VIXSRC_ORIGIN": cfg.TargetOrigin, "VIDKING_ORIGIN": cfg.VidKingOrigin,
 		"VIDLOVE_ORIGIN": cfg.VidLoveOrigin, "VIDSRCME_ORIGIN": cfg.VidsrcmeOrigin,
-		"VIDSRCME_DATA_ORIGIN": cfg.VidsrcmeDataOrigin,
+		"VIDSRCME_DATA_ORIGIN": cfg.VidsrcmeDataOrigin, "CINESRC_ORIGIN": cfg.CineSrcOrigin,
 	} {
 		u, e := url.Parse(v)
 		if e != nil || u.Scheme != "https" || u.Host == "" {
@@ -351,6 +355,10 @@ func (r *Resolver) Resolve(parent context.Context, req MediaRequest) (string, er
 		if proxyURL, ok := r.tryVixsrcDirect(parent, req); ok {
 			return proxyURL, nil
 		}
+	case "cinesrc":
+		if proxyURL, ok := r.tryCinesrcDirect(parent, req); ok {
+			return proxyURL, nil
+		}
 	case "vidking":
 		if proxyURL, ok := r.tryVidkingDirect(parent, req); ok {
 			return proxyURL, nil
@@ -423,6 +431,13 @@ func (r *Resolver) targetURL(req MediaRequest) (string, error) {
 	var path string
 
 	switch req.Provider {
+	case "cinesrc":
+		origin = r.cfg.CineSrcOrigin
+		if req.Type == Movie {
+			path = "/embed/movie/" + req.ID
+		} else {
+			path = "/embed/tv/" + req.ID + "?s=" + req.Season + "&e=" + req.Episode
+		}
 	case "vidking":
 		origin = r.cfg.VidKingOrigin
 		if req.Type == Movie {
@@ -482,7 +497,7 @@ func validateRequest(r MediaRequest) error {
 		return errors.New("unsupported media type")
 	}
 	switch r.Provider {
-	case "", "vixsrc", "vidking", "vidlove", "vidsrcme", "vidsrc":
+	case "", "vixsrc", "vidking", "vidlove", "vidsrcme", "vidsrc", "cinesrc":
 		return nil
 	default:
 		return errors.New("unsupported provider")

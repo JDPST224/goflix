@@ -81,7 +81,7 @@ internal/server/            route table, method/CORS gates, gzip, handlers
 internal/subtitles/         OpenSubtitles/Vidlove search clients, SRT→WebVTT converter
 internal/mediaresolver/     the media pipeline:
     resolver.go               Resolve() orchestration, sessions, config
-    vidking/vidlove/vidsrcme/vixsrc.go per-provider direct resolvers
+    cinesrc/vidking/vidlove/vidsrcme/vixsrc.go per-provider direct resolvers
     browser.go                headless-Chrome fallback scrape
     proxy.go                  the streaming reverse-proxy endpoint
     manifest.go               manifest rewriting + subtitle rendition embedding
@@ -96,14 +96,16 @@ static/js/                  vanilla ES modules: main.js (orchestrator),
 - `GET /api/home|movies|tvshows|popular` — gzipped catalog JSON
 - `GET /api/search?q=&type=` · `/api/detail?type=&id=` · `/api/episodes?id=&season=`
 - `GET /api/media/source/<provider>/movie/<tmdbId>` and `/tv/<id>/<s>/<e>`
-  (`provider` ∈ vixsrc | vidking | vidlove | vidsrcme); legacy unprefixed routes map
+  (`provider` ∈ cinesrc | vixsrc | vidking | vidlove | vidsrcme); legacy unprefixed routes map
   to VixSrc
+- `GET /embed/movie/<tmdbId>` and `GET /embed/tv/<id>[?s=<s>&e=<e>]` — direct CineSrc embed resolution (redirects to stream or returns JSON)
 - `GET /api/media/proxy/<token>.m3u8?url=...` — HLS proxy (supports Range)
 - `POST /api/media/subs/<token>` — register extra subtitle renditions on a
   live session; the resolver embeds its own ladder automatically for
-  vidking/vidlove/vidsrcme, this tops it up
-- `GET /api/subtitles/vidking|vidlove|vidsrcme?type=&id=&season=&episode=` — search
-- `GET /api/subtitles/opensubtitles/download?url=` ·
+  cinesrc/vidking/vidlove/vidsrcme, this tops it up
+- `GET /api/subtitles/cinesrc|vidking|vidlove|vidsrcme?type=&id=&season=&episode=` — search
+- `GET /api/subtitles/cinesrc/download?url=` ·
+  `GET /api/subtitles/opensubtitles/download?url=` ·
   `GET /api/subtitles/vidlove/download?url=` ·
   `GET /api/subtitles/vidsrcme/download?url=` — WebVTT download/convert
 - `GET /api/subtitles/wrap.m3u8?src=...` — single-segment playlist wrapping a
@@ -185,7 +187,7 @@ You can customize the probe target and test scope using environment variables:
 
 | Variable | Default | Description |
 | :--- | :--- | :--- |
-| `BW_PROVIDERS` | *all* | Comma-separated list of providers to test: `vixsrc`, `vidking`, `vidlove`, `vidsrcme` |
+| `BW_PROVIDERS` | *all* | Comma-separated list of providers to test: `cinesrc`, `vixsrc`, `vidking`, `vidlove`, `vidsrcme` |
 | `BW_TYPE` | `movie` | Media type: `movie` or `tv` |
 | `BW_ID` | `27205` | TMDB ID (e.g. `550` for *Fight Club*, `1396` for *Breaking Bad*, `27205` for *Inception*) |
 | `BW_SEASON` | `1` | TV show season number (when `BW_TYPE=tv`) |

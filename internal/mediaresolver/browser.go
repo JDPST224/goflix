@@ -122,7 +122,7 @@ func (r *Resolver) resolveInBrowser(parent context.Context, target string) (stri
 		mu.Unlock()
 	})
 
-	if strings.Contains(strings.ToLower(target), "vidking.net/embed/") || strings.Contains(strings.ToLower(target), "vidlove.cc/embed/") {
+	if strings.Contains(strings.ToLower(target), "vidking.net/embed/") || strings.Contains(strings.ToLower(target), "vidlove.cc/embed/") || strings.Contains(strings.ToLower(target), "cinesrc.st/embed/") {
 		log.Printf("[MediaResolver] Embed used only to discover its HLS manifest; frontend will receive the proxied HLS URL")
 	}
 

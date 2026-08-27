@@ -104,3 +104,85 @@ func (d *Deps) mediaProxyHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadGateway, "Unable to proxy media source")
 	}
 }
+
+// embedMovieDirectHandler directly resolves https://cinesrc.st/embed/movie/{tmdb_id}
+// when accessed via http://<host>/embed/movie/{id}.
+// If requested with Accept: application/json or ?json=1, it returns the JSON payload;
+// otherwise, it redirects (302) directly to the proxied HLS manifest.
+func (d *Deps) embedMovieDirectHandler(w http.ResponseWriter, r *http.Request) {
+	if !corsGate(w, r, "GET", false) {
+		return
+	}
+	id := strings.TrimPrefix(r.URL.Path, "/embed/movie/")
+	if !ValidMediaID(id) {
+		writeError(w, http.StatusBadRequest, "Invalid movie ID")
+		return
+	}
+	source, err := d.Resolver.Resolve(r.Context(), mediaresolver.MediaRequest{
+		Type:     mediaresolver.Movie,
+		ID:       id,
+		Provider: "cinesrc",
+	})
+	if err != nil {
+		log.Printf("[MediaResolver] cinesrc embed movie resolution failed id=%s error=%v", id, err)
+		writeError(w, http.StatusBadGateway, "Unable to resolve media source")
+		return
+	}
+	if strings.Contains(r.Header.Get("Accept"), "application/json") || r.URL.Query().Get("json") == "1" {
+		writeJSON(w, http.StatusOK, map[string]any{"success": true, "type": "hls", "url": source})
+		return
+	}
+	http.Redirect(w, r, source, http.StatusFound)
+}
+
+// embedTVDirectHandler directly resolves https://cinesrc.st/embed/tv/{tmdb_id}?s={s}&e={e}
+// when accessed via http://<host>/embed/tv/{id}?s={s}&e={e} or /embed/tv/{id}/{s}/{e}.
+func (d *Deps) embedTVDirectHandler(w http.ResponseWriter, r *http.Request) {
+	if !corsGate(w, r, "GET", false) {
+		return
+	}
+	pathRemainder := strings.Trim(strings.TrimPrefix(r.URL.Path, "/embed/tv/"), "/")
+	parts := strings.Split(pathRemainder, "/")
+	var id, season, episode string
+	if len(parts) == 3 {
+		id, season, episode = parts[0], parts[1], parts[2]
+	} else if len(parts) == 1 && parts[0] != "" {
+		id = parts[0]
+		season = r.URL.Query().Get("s")
+		if season == "" {
+			season = r.URL.Query().Get("season")
+		}
+		episode = r.URL.Query().Get("e")
+		if episode == "" {
+			episode = r.URL.Query().Get("episode")
+		}
+		if season == "" {
+			season = "1"
+		}
+		if episode == "" {
+			episode = "1"
+		}
+	}
+	if !ValidMediaID(id) || !ValidMediaID(season) || !ValidMediaID(episode) {
+		writeError(w, http.StatusBadRequest, "Invalid TV episode parameters")
+		return
+	}
+	source, err := d.Resolver.Resolve(r.Context(), mediaresolver.MediaRequest{
+		Type:     mediaresolver.TV,
+		ID:       id,
+		Season:   season,
+		Episode:  episode,
+		Provider: "cinesrc",
+	})
+	if err != nil {
+		log.Printf("[MediaResolver] cinesrc embed TV resolution failed id=%s season=%s episode=%s error=%v", id, season, episode, err)
+		writeError(w, http.StatusBadGateway, "Unable to resolve media source")
+		return
+	}
+	if strings.Contains(r.Header.Get("Accept"), "application/json") || r.URL.Query().Get("json") == "1" {
+		writeJSON(w, http.StatusOK, map[string]any{"success": true, "type": "hls", "url": source})
+		return
+	}
+	http.Redirect(w, r, source, http.StatusFound)
+}
+

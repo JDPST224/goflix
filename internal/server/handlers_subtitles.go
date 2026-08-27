@@ -36,6 +36,10 @@ var (
 		"vidsrcme.xyz",
 		"cloudorchestranova.com",
 	}
+	cinesrcAllowedDomains = []string{
+		"subs.bright67.online",
+		"bright67.online",
+	}
 )
 
 type subtitleQueryParams struct {
@@ -284,6 +288,47 @@ func (d *Deps) fetchVidsrcmeSubtitleVTT(ctx context.Context, targetURL string) (
 	return fetchSubtitleVTT(ctx, targetURL, "https://cloudorchestranova.com/", vidsrcmeAllowedDomains, "VidSrcMe")
 }
 
+// fetchCinesrcSubtitleVTT downloads a raw CineSrc subtitle file and converts it to WebVTT.
+func (d *Deps) fetchCinesrcSubtitleVTT(ctx context.Context, targetURL string) (string, int, string) {
+	return fetchSubtitleVTT(ctx, targetURL, "https://cinesrc.st/", cinesrcAllowedDomains, "CineSrc")
+}
+
+func (d *Deps) subtitlesCinesrcHandler(w http.ResponseWriter, r *http.Request) {
+	if !corsGate(w, r, "GET", false) {
+		return
+	}
+
+	p, errMsg, ok := parseSubtitleParams(r)
+	if !ok {
+		writeError(w, http.StatusBadRequest, errMsg)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
+	defer cancel()
+
+	subs := subtitles.FetchCinesrcSubtitles(ctx, p.mediaType, p.id, p.season, p.episode)
+	if len(subs) == 0 && d.Client.HasCredentials() {
+		querySeason, queryEpisode := "", ""
+		if p.mediaType == "tv" {
+			querySeason, queryEpisode = p.season, p.episode
+		}
+		if imdbID, err := d.Client.ExternalID(p.mediaType, p.id, p.season, p.episode); err == nil && imdbID != "" {
+			subs = subtitles.FetchOpenSubtitles(ctx, imdbID, querySeason, queryEpisode)
+		}
+	}
+
+	if subs == nil {
+		subs = []subtitles.FrontendSubtitle{}
+	}
+	log.Printf("[Subtitles] CineSrc returned %d subtitles for id=%s", len(subs), p.id)
+	writeJSON(w, http.StatusOK, map[string]any{"success": true, "subtitles": subs})
+}
+
+func (d *Deps) subtitlesCinesrcDownloadHandler(w http.ResponseWriter, r *http.Request) {
+	d.handleSubtitleDownload(w, r, d.fetchCinesrcSubtitleVTT)
+}
+
 func (d *Deps) handleSubtitleDownload(w http.ResponseWriter, r *http.Request, fetchFn func(context.Context, string) (string, int, string)) {
 	if !corsGate(w, r, "GET", false) {
 		return
@@ -385,6 +430,13 @@ func (d *Deps) subtitlesWrapVTTHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		content, status, msg = d.fetchVidsrcmeSubtitleVTT(r.Context(), targetURL)
+	case u.Path == "/api/subtitles/cinesrc/download":
+		targetURL := u.Query().Get("url")
+		if targetURL == "" {
+			writeError(w, http.StatusBadRequest, "Invalid subtitle source")
+			return
+		}
+		content, status, msg = d.fetchCinesrcSubtitleVTT(r.Context(), targetURL)
 	case u.Path == "/api/subtitles/opensubtitles/download":
 		targetURL := u.Query().Get("url")
 		if targetURL == "" {

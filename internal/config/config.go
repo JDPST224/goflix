@@ -39,6 +39,7 @@ func Load(path string) (Config, error) {
 			VidLoveOrigin:           "https://player.vidlove.cc",
 			VidsrcmeOrigin:          "https://vidsrcme.ru",
 			VidsrcmeDataOrigin:      "https://data.vidsrcme.ru",
+			CineSrcOrigin:           "https://cinesrc.st",
 			BrowserHeadless:         true,
 			BrowserTimeout:          45 * time.Second,
 			SourceResolutionTimeout: 20 * time.Second,
@@ -114,6 +115,8 @@ func Load(path string) (Config, error) {
 			cfg.Resolver.VidsrcmeOrigin = cleanConfigValue(val)
 		case "VIDSRCME_DATA_ORIGIN":
 			cfg.Resolver.VidsrcmeDataOrigin = cleanConfigValue(val)
+		case "CINESRC_ORIGIN":
+			cfg.Resolver.CineSrcOrigin = cleanConfigValue(val)
 		}
 	}
 
@@ -179,6 +182,9 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if v := os.Getenv("VIDSRCME_DATA_ORIGIN"); v != "" {
 		cfg.Resolver.VidsrcmeDataOrigin = v
+	}
+	if v := os.Getenv("CINESRC_ORIGIN"); v != "" {
+		cfg.Resolver.CineSrcOrigin = v
 	}
 	if v := os.Getenv("TMDB_ACCESS_TOKEN"); strings.TrimSpace(v) != "" {
 		cfg.TMDBAccessToken = cleanConfigValue(v)

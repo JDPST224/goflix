@@ -148,12 +148,21 @@ func bwTrimErr(err error) string {
 // chains, then pings and downloads real segments from each. It is a report,
 // not an assertion: upstream outages never fail the test.
 func TestBandwidth(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping live bandwidth benchmark in short mode")
+	}
 	req := bwRequestFromEnv()
 	filter := bwProvidersFilter()
 	t.Logf("Probing upstream servers with %s %s (season %s, episode %s)",
 		req.Type, req.ID, req.Season, req.Episode)
 
-	r, err := New(Config{MaxBrowserSessions: 1})
+	headless := true
+	if v := os.Getenv("BROWSER_HEADLESS"); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			headless = b
+		}
+	}
+	r, err := New(Config{MaxBrowserSessions: 1, BrowserHeadless: headless})
 
 	if err != nil {
 		t.Fatal(err)
@@ -278,6 +287,13 @@ func TestBandwidth(t *testing.T) {
 		cctx, cancel := context.WithTimeout(ctx, 25*time.Second)
 		defer cancel()
 		res, err := r.resolveVidsrcmeDirect(cctx, req)
+		return res, "", err
+	})
+
+	add("cinesrc", "", func(ctx context.Context, req MediaRequest) (*directResolution, string, error) {
+		cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+		res, err := r.resolveCinesrcDirect(cctx, req)
 		return res, "", err
 	})
 

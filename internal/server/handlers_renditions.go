@@ -52,6 +52,9 @@ func validLocalSubtitleWrapSrc(p string) bool {
 	if u.Path == "/api/subtitles/vidsrcme/download" {
 		return true
 	}
+	if u.Path == "/api/subtitles/cinesrc/download" {
+		return true
+	}
 	if u.Path == "/api/subtitles/opensubtitles/download" {
 		return true
 	}
@@ -230,7 +233,9 @@ func FetchSubRenditions(ctx context.Context, client *catalog.Client, req mediare
 
 	var subs []subtitles.FrontendSubtitle
 
-	if req.Provider == "vidsrcme" {
+	if req.Provider == "cinesrc" {
+		subs = subtitles.FetchCinesrcSubtitles(ctx, mediaType, id, req.Season, req.Episode)
+	} else if req.Provider == "vidsrcme" {
 		subs = subtitles.FetchVidsrcmeSubtitles(ctx, mediaType, id, req.Season, req.Episode)
 	} else if req.Provider == "vidlove" {
 		subs = subtitles.FetchVidloveSubtitles(ctx, mediaType, id, req.Season, req.Episode)
@@ -242,7 +247,7 @@ func FetchSubRenditions(ctx context.Context, client *catalog.Client, req mediare
 		}
 	}
 
-	if len(subs) == 0 && req.Provider != "vidlove" && req.Provider != "vidsrcme" {
+	if len(subs) == 0 && req.Provider != "vidlove" && req.Provider != "vidsrcme" && req.Provider != "cinesrc" {
 		subs = subtitles.FetchVidloveSubtitles(ctx, mediaType, id, req.Season, req.Episode)
 	}
 	return renditionsFromSubtitles(subs)
