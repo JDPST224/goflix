@@ -45,17 +45,41 @@ const vixsrcMasterBlockCap = 800
 const vixsrcEmbedHTMLCap = 1 << 19
 
 var (
-	// vixsrcParamRE matches the single-quoted 'key': 'value' pairs inside the
+	// vixsrcParamRE matches single- or double-quoted key-value pairs inside the
 	// window.masterPlaylist block.
-	vixsrcParamRE = regexp.MustCompile(`'(\w+)'\s*:\s*'([^']*)'`)
-	// vixsrcURLRE matches the url: '…' literal of window.masterPlaylist.
-	vixsrcURLRE = regexp.MustCompile(`url\s*:\s*'([^']+)'`)
+	vixsrcParamRE = regexp.MustCompile(`(?i)['"]?(\w+)['"]?\s*:\s*['"]([^'"]*)['"]`)
+	// vixsrcURLRE matches the url: '…' or "…" literal of window.masterPlaylist.
+	vixsrcURLRE = regexp.MustCompile(`(?i)['"]?url['"]?\s*:\s*['"]([^'"]+)['"]`)
 )
 
 func applyVixsrcClientHints(h http.Header) {
-	h.Set("Sec-Ch-Ua", `"Not=A?Brand";v="99", "Google Chrome";v="151", "Chromium";v="151"`)
+	h.Set("Sec-Ch-Ua", `"Not(A:Brand";v="99", "Google Chrome";v="133", "Chromium";v="133"`)
 	h.Set("Sec-Ch-Ua-Mobile", "?0")
 	h.Set("Sec-Ch-Ua-Platform", `"Windows"`)
+}
+
+func applyVixsrcRequestHeaders(h http.Header, referer, origin string, isHTML bool) {
+	h.Set("User-Agent", defaultUserAgent)
+	applyVixsrcClientHints(h)
+	h.Set("Accept-Language", "en-US,en;q=0.9")
+	if isHTML {
+		h.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7")
+		h.Set("Sec-Fetch-Dest", "iframe")
+		h.Set("Sec-Fetch-Mode", "navigate")
+		h.Set("Sec-Fetch-Site", "same-origin")
+		h.Set("Upgrade-Insecure-Requests", "1")
+	} else {
+		h.Set("Accept", "*/*")
+		h.Set("Sec-Fetch-Dest", "empty")
+		h.Set("Sec-Fetch-Mode", "cors")
+		h.Set("Sec-Fetch-Site", "same-origin")
+	}
+	if referer != "" {
+		h.Set("Referer", referer)
+	}
+	if origin != "" {
+		h.Set("Origin", origin)
+	}
 }
 
 // tryVixsrcDirect resolves vixsrc without the browser, registers the proxy
@@ -97,16 +121,12 @@ func (r *Resolver) resolveVixsrcDirect(ctx context.Context, req MediaRequest) (*
 	client := &http.Client{Transport: r.transport, Timeout: 12 * time.Second}
 	// Use the configured origin (cfg.TargetOrigin) so VIXSRC_ORIGIN overrides work.
 	origin := r.cfg.TargetOrigin
-	get := func(raw, referer string, limit int64) ([]byte, int, error) {
+	get := func(raw, referer string, limit int64, isHTML bool) ([]byte, int, error) {
 		req2, err := http.NewRequestWithContext(ctx, http.MethodGet, raw, nil)
 		if err != nil {
 			return nil, 0, err
 		}
-		req2.Header.Set("User-Agent", defaultUserAgent)
-		applyVixsrcClientHints(req2.Header)
-		if referer != "" {
-			req2.Header.Set("Referer", referer)
-		}
+		applyVixsrcRequestHeaders(req2.Header, referer, origin, isHTML)
 		resp, err := client.Do(req2)
 		if err != nil {
 			return nil, 0, err
@@ -127,7 +147,7 @@ func (r *Resolver) resolveVixsrcDirect(ctx context.Context, req MediaRequest) (*
 	}
 
 	// Step 1: stream API returns the tokenized embed path.
-	srcBody, status, err := get(origin+apiPath, origin+"/", 64<<10)
+	srcBody, status, err := get(origin+apiPath, origin+"/", 64<<10, false)
 	if err != nil {
 		return nil, fmt.Errorf("stream API: %w", err)
 	}
@@ -143,7 +163,7 @@ func (r *Resolver) resolveVixsrcDirect(ctx context.Context, req MediaRequest) (*
 	embedURL := origin + srcPayload.Src
 
 	// Step 2: embed page carries the masterPlaylist params.
-	html, status, err := get(embedURL, pageRef, vixsrcEmbedHTMLCap)
+	html, status, err := get(embedURL, pageRef, vixsrcEmbedHTMLCap, true)
 	if err != nil {
 		return nil, fmt.Errorf("embed page: %w", err)
 	}
@@ -161,10 +181,8 @@ func (r *Resolver) resolveVixsrcDirect(ctx context.Context, req MediaRequest) (*
 
 	// Step 3: fetch the master playlist with the embed URL as Referer.
 	masterHeaders := make(http.Header)
-	masterHeaders.Set("User-Agent", defaultUserAgent)
-	applyVixsrcClientHints(masterHeaders)
-	masterHeaders.Set("Referer", embedURL)
-	text, status, err := get(res.Source, embedURL, maxManifestBytes)
+	applyVixsrcRequestHeaders(masterHeaders, embedURL, origin, false)
+	text, status, err := get(res.Source, embedURL, maxManifestBytes, false)
 	if err != nil {
 		return nil, fmt.Errorf("master playlist: %w", err)
 	}
@@ -206,13 +224,24 @@ func parseVixsrcEmbed(html, embedURL, origin string) (*directResolution, error) 
 	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
 		return nil, fmt.Errorf("masterPlaylist url %q invalid", redactQuery(mURL[1]))
 	}
-	// Validate the master playlist host against the configured origin so a
-	// page served from an alternate domain can't redirect us elsewhere.
+	// Validate the master playlist host against the configured origin and known
+	// VixSrc domains so a page served from an alternate domain can't redirect us elsewhere.
 	originHost := ""
 	if ou, oe := url.Parse(origin); oe == nil {
 		originHost = strings.ToLower(ou.Host)
 	}
-	if originHost != "" && !strings.EqualFold(u.Host, originHost) && !strings.HasSuffix(strings.ToLower(u.Host), "."+originHost) {
+	hostLower := strings.ToLower(u.Host)
+	isAllowedHost := false
+	if originHost != "" && (hostLower == originHost || strings.HasSuffix(hostLower, "."+originHost)) {
+		isAllowedHost = true
+	}
+	for _, d := range []string{"vixsrc.to", "vixcloud.co", "vix-content.net"} {
+		if hostLower == d || strings.HasSuffix(hostLower, "."+d) {
+			isAllowedHost = true
+			break
+		}
+	}
+	if !isAllowedHost {
 		return nil, fmt.Errorf("masterPlaylist host %q outside configured origin %q", u.Host, originHost)
 	}
 	q := u.Query()
@@ -221,13 +250,22 @@ func parseVixsrcEmbed(html, embedURL, origin string) (*directResolution, error) 
 	if asn := params["asn"]; asn != "" {
 		q.Set("asn", asn)
 	}
-	// No b=1 here — the endpoint 403s any request that carries it (see the
-	// package comment above).
+	// Keep existing query parameters (like b=1 when present in mURL) and append required ones.
 	q.Set("h", "1")
 	q.Set("lang", "en")
 	u.RawQuery = q.Encode()
+
+	allowed := map[string]bool{
+		hostLower:         true,
+		"vixsrc.to":       true,
+		"vixcloud.co":     true,
+		"vix-content.net": true,
+	}
+	if originHost != "" {
+		allowed[originHost] = true
+	}
 	return &directResolution{
 		Source:  u.String(),
-		Allowed: map[string]bool{strings.ToLower(u.Host): true},
+		Allowed: allowed,
 	}, nil
 }
