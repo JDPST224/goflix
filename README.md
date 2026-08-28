@@ -136,7 +136,7 @@ static/js/                  vanilla ES modules: main.js (orchestrator),
 
 ## Testing & Debugging
 
-All unit tests are located in the `debug/` directory, while live upstream bandwidth benchmarks are kept in `internal/mediaresolver/bandwidth_test.go`.
+All unit tests are located in the `debug/` directory, live upstream bandwidth benchmarks are kept in `internal/mediaresolver/bandwidth_test.go`, and proxy cache-admission regression tests in `internal/mediaresolver/proxy_cache_test.go`.
 
 ### Running Unit Tests
 
