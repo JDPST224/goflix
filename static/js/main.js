@@ -3783,6 +3783,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function closePlayerModal() {
         playerRequestId++;
+        // Back means "leave the player entirely": drop any active fullscreen
+        // (container or iOS native video fullscreen) as part of closing.
+        // Tearing the player down while fullscreen is still engaged leaves
+        // the fullscreen layer outliving the modal — a stuck black screen on
+        // some TV browsers, and a second tap needed elsewhere. (Esc keeps its
+        // exit-first behavior — see the keydown handler.)
+        if (isPlayerFullscreen() || (vixPlayer.webkitDisplayingFullscreen && vixPlayer.webkitExitFullscreen)) {
+            exitPlayerFullscreen();
+        }
         if (sourceAbortController) {
             // Release the server-side resolution (browser session) for a
             // viewer who is no longer waiting on it.
@@ -4078,12 +4087,36 @@ document.addEventListener('DOMContentLoaded', () => {
         return undefined; // signals "no API available on this element"
     }
 
+    function isPlayerFullscreen() {
+        return !!(document.fullscreenElement || document.webkitFullscreenElement ||
+            document.mozFullScreenElement || document.msFullscreenElement);
+    }
+
+    // exitPlayerFullscreen leaves every fullscreen mode the player can be in:
+    // document/container fullscreen via the vendor-prefixed exit APIs, plus
+    // iOS's native video fullscreen, which lives outside the document
+    // fullscreen API entirely (webkitDisplayingFullscreen/webkitExitFullscreen).
+    function exitPlayerFullscreen() {
+        if (document.exitFullscreen) {
+            const p = document.exitFullscreen();
+            if (p && p.catch) p.catch(() => {});
+        } else if (document.webkitExitFullscreen) {
+            document.webkitExitFullscreen();
+        } else if (document.mozCancelFullScreen) {
+            document.mozCancelFullScreen();
+        } else if (document.msExitFullscreen) {
+            document.msExitFullscreen();
+        }
+        if (vixPlayer.webkitDisplayingFullscreen && vixPlayer.webkitExitFullscreen) {
+            try { vixPlayer.webkitExitFullscreen(); } catch (_) {}
+        }
+    }
+
     function togglePlayerFullscreen() {
         const target = playerModal;
-        const isFullscreen = document.fullscreenElement || document.webkitFullscreenElement || document.mozFullScreenElement || document.msFullscreenElement;
 
         try {
-            if (!isFullscreen) {
+            if (!isPlayerFullscreen()) {
                 // Some browsers (older mobile Safari, some in-app/webview
                 // browsers, or pages embedded in an iframe without
                 // `allow="fullscreen"`) report `fullscreenEnabled === false`.
@@ -4135,16 +4168,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     }
                 }
             } else {
-                if (document.exitFullscreen) {
-                    const p = document.exitFullscreen();
-                    if (p && p.catch) p.catch(() => {});
-                } else if (document.webkitExitFullscreen) {
-                    document.webkitExitFullscreen();
-                } else if (document.mozCancelFullScreen) {
-                    document.mozCancelFullScreen();
-                } else if (document.msExitFullscreen) {
-                    document.msExitFullscreen();
-                }
+                exitPlayerFullscreen();
             }
         } catch (err) {
             console.warn('Fullscreen error:', err);
@@ -4228,7 +4252,8 @@ document.addEventListener('DOMContentLoaded', () => {
             // own exit-first handler — some engines fire this keydown alongside
             // the fullscreenchange, and tearing the whole player down on top of
             // that loses playback. The next Esc then closes the player.
-            const inFullscreen = document.fullscreenElement || document.webkitFullscreenElement;
+            const inFullscreen = isPlayerFullscreen() ||
+                (vixPlayer.webkitDisplayingFullscreen && vixPlayer.webkitExitFullscreen);
             if (playerOpen && !inFullscreen) { closePlayerModal(); return; }
             if (detailOpen) { closeDetailModal(); return; }
             if (searchOpen) { closeSearch(); return; }
