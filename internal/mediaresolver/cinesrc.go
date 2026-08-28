@@ -2,87 +2,74 @@ package mediaresolver
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"net/url"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/chromedp/cdproto/network"
+	"github.com/chromedp/cdproto/page"
+	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
 )
 
-// Direct CineSrc resolution. Resolves CineSrc streams from its embed page
-// (https://cinesrc.st/embed/movie/{id} or https://cinesrc.st/embed/tv/{id}?s={s}&e={e}).
-//
-// The embed uses Cloudflare Turnstile, encrypted challenges (via /donut.js and
-// /130626-prod.js), and Next.js server actions. We resolve it via a high-performance,
-// resource-filtered headless browser instance that caches bytecode/WASM on disk,
-// suppresses non-essential assets (fonts, images, ad trackers), intercepts the
-// master playlist immediately upon appearance, and verifies it in a single pass.
+// High-speed CineSrc programmatic resolver.
+// Resolves CineSrc streams directly from its embed infrastructure
+// (https://cinesrc.st/embed/movie/{id} or https://cinesrc.st/embed/tv/{id}?s={s}&e={e})
+// using Next.js Server Actions and WebAssembly / VM challenge solvers.
 
-// tryCinesrcDirect resolves cinesrc, registers the proxy session, and primes
-// the body cache. It returns false if resolution fails so Resolve can fall back.
-func (r *Resolver) tryCinesrcDirect(parent context.Context, req MediaRequest) (string, bool) {
-	ctx, cancel := context.WithTimeout(parent, 25*time.Second)
-	defer cancel()
-
-	cr, err := r.resolveCinesrcDirect(ctx, req)
-	if err != nil {
-		log.Printf("[MediaResolver] cinesrc direct resolve unavailable (%v); falling back to browser scrape", err)
-		return "", false
-	}
-	token, err := r.newSession(cr.Source, cr.Headers, cr.Allowed)
-	if err != nil {
-		log.Printf("[MediaResolver] cinesrc direct session failed (%v); falling back to browser scrape", err)
-		return "", false
-	}
-	if cr.MasterText != "" {
-		r.cache.put(&cacheEntry{
-			key:         cr.Source,
-			data:        []byte(cr.MasterText),
-			status:      http.StatusOK,
-			contentType: "application/vnd.apple.mpegurl",
-			expiresAt:   time.Now().Add(cacheEntryTTL),
-		})
-	}
-	log.Printf("[MediaResolver] cinesrc resolved directly source=%s", redactQuery(cr.Source))
-	r.attachAndWarm(token, req)
-	return "/api/media/proxy/" + token + ".m3u8", true
+type cinesrcWorker struct {
+	mu        sync.Mutex
+	allocCtx  context.Context
+	cancelAll context.CancelFunc
+	bCtx      context.Context
+	cancelB   context.CancelFunc
+	createdAt time.Time
 }
 
-// resolveCinesrcDirect acquires a concurrency semaphore slot and runs the optimized fast-path.
-func (r *Resolver) resolveCinesrcDirect(ctx context.Context, req MediaRequest) (*directResolution, error) {
-	target, err := r.cinesrcTargetURL(req)
-	if err != nil {
-		return nil, err
-	}
+var (
+	globalCineWorkerMu sync.Mutex
+	globalCineWorker   *cinesrcWorker
+)
 
-	select {
-	case r.sem <- struct{}{}:
-		defer func() { <-r.sem }()
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
-
-	return r.resolveCinesrcFast(ctx, target)
+var cineBlockedPatterns = []string{
+	"*.woff", "*.woff2", "*.ttf", "*.otf", "*.eot",
+	"*.png", "*.webp", "*.svg", "*.ico", "*.jpeg", "*.jpg", "*.gif", "*.avif",
+	"*.css",
+	"*init.mp4*", "*playlist_*.jpg*", "*playlist_*.png*", "*playlist_*.jpeg*", "*.ts", "*.m4s",
+	"*image.tmdb.org*",
+	"*api.themoviedb.org*",
+	"*cineflix.st*",
+	"*cloudflareinsights.com*",
+	"*llvpn.com*",
+	"*rtmark.net*",
+	"*luugy.com*",
+	"*adexchangerapid.com*",
+	"*usrpubtrk.com*",
+	"*gstatic.com*",
+	"*google-analytics.com*",
+	"*googletagmanager.com*",
 }
 
-// resolveCinesrcFast boots an optimized browser session with a persistent disk cache
-// profile, blocks unneeded media/font/ad requests, and captures the master playlist.
-func (r *Resolver) resolveCinesrcFast(ctx context.Context, target string) (*directResolution, error) {
-	profileDir := filepath.Join(os.TempDir(), "goflix_cinesrc_profile")
-	_ = os.MkdirAll(profileDir, 0700)
+func getOrInitCineWorker(cfg Config) (*cinesrcWorker, error) {
+	globalCineWorkerMu.Lock()
+	defer globalCineWorkerMu.Unlock()
+
+	if globalCineWorker != nil && globalCineWorker.bCtx != nil && globalCineWorker.bCtx.Err() == nil {
+		if time.Since(globalCineWorker.createdAt) < 2*time.Hour {
+			return globalCineWorker, nil
+		}
+		globalCineWorker.close()
+	}
 
 	opts := append([]chromedp.ExecAllocatorOption{}, chromedp.DefaultExecAllocatorOptions[:]...)
 	opts = append(opts,
-		chromedp.Flag("headless", r.cfg.BrowserHeadless),
+		chromedp.Flag("headless", cfg.BrowserHeadless),
 		chromedp.Flag("disable-gpu", true),
 		chromedp.Flag("no-first-run", true),
 		chromedp.Flag("no-default-browser-check", true),
@@ -99,96 +86,320 @@ func (r *Resolver) resolveCinesrcFast(ctx context.Context, target string) (*dire
 		chromedp.Flag("mute-audio", true),
 		chromedp.Flag("disable-dev-shm-usage", true),
 		chromedp.Flag("disable-features", "TranslateUI,BlinkGenPropertyTrees"),
-		chromedp.UserDataDir(profileDir),
+		chromedp.Flag("disable-background-timer-throttling", true),
+		chromedp.Flag("disable-backgrounding-occluded-windows", true),
+		chromedp.Flag("disable-renderer-backgrounding", true),
+		chromedp.Flag("blink-settings", "imagesEnabled=false"),
 	)
-	if r.cfg.BrowserExecutable != "" {
-		opts = append(opts, chromedp.ExecPath(r.cfg.BrowserExecutable))
+	if cfg.BrowserExecutable != "" {
+		opts = append(opts, chromedp.ExecPath(cfg.BrowserExecutable))
 	}
 
-	alloc, cancelAlloc := chromedp.NewExecAllocator(ctx, opts...)
-	defer cancelAlloc()
+	allocCtx, cancelAll := chromedp.NewExecAllocator(context.Background(), opts...)
+	bCtx, cancelB := chromedp.NewContext(allocCtx)
 
-	bCtx, cancelBrowser := chromedp.NewContext(alloc)
-	defer cancelBrowser()
-
-	var mu sync.Mutex
-	var masterURL string
-	capturedHeaders := make(http.Header)
-	hlsFound := make(chan struct{}, 1)
-
-	chromedp.ListenTarget(bCtx, func(ev any) {
-		switch e := ev.(type) {
-		case *network.EventRequestWillBeSent:
-			if strings.Contains(e.Request.URL, "master.m3u8") {
-				mu.Lock()
-				for k, v := range e.Request.Headers {
-					if s, ok := v.(string); ok {
-						switch strings.ToLower(k) {
-						case "user-agent", "referer", "origin", "cookie", "accept", "accept-language":
-							capturedHeaders.Set(k, s)
-						}
-					}
-				}
-				mu.Unlock()
+	const initScript = `
+		window.__captured_d6 = null;
+		window.addEventListener('_cs', (e) => {
+			const key = e.detail;
+			if (key && window[key]) {
+				window.__captured_d6 = window[key];
 			}
-		case *network.EventResponseReceived:
-			u := e.Response.URL
-			if strings.Contains(u, "master.m3u8") && e.Response.Status >= 200 && e.Response.Status < 400 {
-				mu.Lock()
-				masterURL = u
-				mu.Unlock()
-				select {
-				case hlsFound <- struct{}{}:
-				default:
-				}
-			}
-		}
-	})
-
-	// Block heavy resources and tracking scripts that CineSrc does not need for stream resolution.
-	blockedPatterns := []string{
-		"*.woff", "*.woff2", "*.ttf", "*.otf", "*.eot",
-		"*.png", "*.webp", "*.svg", "*.ico",
-		"*image.tmdb.org*",
-		"*api.themoviedb.org*",
-		"*cineflix.st*",
-		"*cloudflareinsights.com*",
-		"*llvpn.com*",
-		"*rtmark.net*",
-		"*luugy.com*",
-		"*adexchangerapid.com*",
-		"*usrpubtrk.com*",
-		"*gstatic.com*",
-	}
+		});
+	`
 
 	if err := chromedp.Run(bCtx,
 		network.Enable(),
-		network.SetBlockedURLs(blockedPatterns),
+		network.SetBlockedURLs(cineBlockedPatterns),
+		chromedp.ActionFunc(func(c context.Context) error {
+			_, err := page.AddScriptToEvaluateOnNewDocument(initScript).Do(c)
+			return err
+		}),
 	); err != nil {
-		return nil, fmt.Errorf("network initialization: %w", err)
+		cancelB()
+		cancelAll()
+		return nil, err
 	}
 
-	go func() {
-		_ = chromedp.Run(bCtx, chromedp.Navigate(target))
-	}()
+	globalCineWorker = &cinesrcWorker{
+		allocCtx:  allocCtx,
+		cancelAll: cancelAll,
+		bCtx:      bCtx,
+		cancelB:   cancelB,
+		createdAt: time.Now(),
+	}
+	return globalCineWorker, nil
+}
 
+func (w *cinesrcWorker) close() {
+	if w.cancelB != nil {
+		w.cancelB()
+	}
+	if w.cancelAll != nil {
+		w.cancelAll()
+	}
+}
+
+type cinesrcDirectResult struct {
+	Success bool   `json:"success"`
+	Error   string `json:"error"`
+	Details []any  `json:"details"`
+	Result  struct {
+		URL []struct {
+			Source string `json:"source"`
+			URL    string `json:"url"`
+			Hash   string `json:"hash"`
+		} `json:"url"`
+		Captions []struct {
+			ID       string `json:"id"`
+			Language string `json:"language"`
+			URL      string `json:"url"`
+		} `json:"captions"`
+		ID       string `json:"id"`
+		Name     string `json:"name"`
+		Provider string `json:"provider"`
+	} `json:"result"`
+}
+
+// tryCinesrcDirect resolves cinesrc, registers the proxy session, and primes
+// the body cache. It returns false if resolution fails so Resolve can fall back.
+func (r *Resolver) tryCinesrcDirect(parent context.Context, req MediaRequest) (string, bool) {
+	ctx, cancel := context.WithTimeout(parent, 25*time.Second)
+	defer cancel()
+
+	cr, err := r.resolveCinesrcDirect(ctx, req)
+	if err != nil {
+		log.Printf("[MediaResolver] cinesrc direct resolve unavailable: %v", err)
+		return "", false
+	}
+	token, err := r.newSession(cr.Source, cr.Headers, cr.Allowed)
+	if err != nil {
+		log.Printf("[MediaResolver] cinesrc direct session failed: %v", err)
+		return "", false
+	}
+	log.Printf("[MediaResolver] cinesrc resolved directly source=%s", redactQuery(cr.Source))
+	r.attachAndWarm(token, req)
+	return "/api/media/proxy/" + token + ".m3u8", true
+}
+
+// resolveCinesrcDirect acquires a concurrency semaphore slot and executes programmatic resolution.
+func (r *Resolver) resolveCinesrcDirect(ctx context.Context, req MediaRequest) (*directResolution, error) {
 	select {
-	case <-hlsFound:
+	case r.sem <- struct{}{}:
+		defer func() { <-r.sem }()
 	case <-ctx.Done():
-		return nil, fmt.Errorf("cinesrc resolution timeout: %w", ctx.Err())
+		return nil, ctx.Err()
 	}
 
-	mu.Lock()
-	mURL := masterURL
-	headers := capturedHeaders.Clone()
-	mu.Unlock()
+	return r.resolveCinesrcProgrammatic(ctx, req)
+}
 
-	if mURL == "" {
-		return nil, errors.New("no HLS source found")
+func (r *Resolver) resolveCinesrcProgrammatic(ctx context.Context, req MediaRequest) (*directResolution, error) {
+	worker, werr := getOrInitCineWorker(r.cfg)
+	if werr != nil || worker == nil {
+		return nil, fmt.Errorf("warm worker not initialized: %w", werr)
 	}
+
+	worker.mu.Lock()
+	defer worker.mu.Unlock()
+
+	if worker.bCtx == nil || worker.bCtx.Err() != nil {
+		return nil, errors.New("warm worker context closed")
+	}
+
+	origin := r.cfg.CineSrcOrigin
+	if origin == "" {
+		origin = "https://cinesrc.st"
+	}
+	origin = strings.TrimRight(origin, "/")
+
+	bType := "movie"
+	if req.Type == TV {
+		bType = "tv"
+	}
+	sParam := strings.TrimSpace(req.Season)
+	eParam := strings.TrimSpace(req.Episode)
+	if sParam == "0" {
+		sParam = ""
+	}
+	if eParam == "0" {
+		eParam = ""
+	}
+	hasSeasonEp := bType == "tv" && sParam != "" && eParam != ""
+
+	targetURL := origin + "/embed/" + bType + "/" + url.PathEscape(req.ID)
+	if hasSeasonEp {
+		targetURL += "?s=" + url.QueryEscape(sParam) + "&e=" + url.QueryEscape(eParam)
+	}
+
+	evalScript := `
+		(async () => {
+			let d6 = null;
+			for (let i = 0; i < 250; i++) {
+				d6 = window.__captured_d6;
+				if (d6?.gc && d6?.dr && window.__ss2_challenge?.gc) break;
+				await new Promise(r => setTimeout(r, 10));
+			}
+			if (!d6?.gc || !d6?.dr || !window.__ss2_challenge?.gc) {
+				return JSON.stringify({ error: "challenge handlers unavailable" });
+			}
+			const ss2 = window.__ss2_challenge;
+
+			let i = window.location.pathname.match(/^\/embed\/(movie|tv)\/([^/]+)\/?$/);
+			if (!i) return JSON.stringify({ error: "bad path: " + window.location.pathname });
+
+			let r = new URLSearchParams(window.location.search).get("s") || new URLSearchParams(window.location.search).get("season");
+			let s = new URLSearchParams(window.location.search).get("e") || new URLSearchParams(window.location.search).get("episode");
+			let n = new TextEncoder().encode(JSON.stringify([i[1], decodeURIComponent(i[2]), r, s]));
+			let a = "";
+			for (let e of n) a += String.fromCharCode(e);
+			let l = btoa(a).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+
+			let bType = i[1];
+			let actType = bType === "movie" ? "movie" : "show";
+			let sVal = r ? String(r) : "$undefined";
+			let eVal = s ? String(s) : "$undefined";
+			const servers = ["nebula", "lisbon", "surge", "spark", "storm"];
+
+			async function getCompoundToken() {
+				let bResp;
+				let bData;
+				for (let attempt = 0; attempt < 20; attempt++) {
+					bResp = await fetch("/api/c/bootstrap", { method: "POST", headers: { "x-cs-q": l }, credentials: "include", cache: "no-store" });
+					if (bResp.status === 428) {
+						await new Promise(res => setTimeout(res, 200));
+						continue;
+					}
+					if (!bResp.ok) throw Error("bootstrap " + bResp.status);
+					bData = await bResp.json();
+					break;
+				}
+				if (!bData || !bData.r) throw Error("bootstrap timeout");
+				let d = bData.r;
+				let h = bData.p;
+
+				let origFetch = window.fetch;
+				let boundFetch = origFetch.bind(window);
+				let interceptFetch = (e, t) => {
+					let i = "string" == typeof e || e instanceof URL ? String(e) : e.url;
+					let r = new URL(i, window.location.href);
+					if (r.origin === window.location.origin && ("/api/c/issue" === r.pathname || "/api/c/stage2/issue" === r.pathname)) {
+						let i = new Headers(e instanceof Request ? e.headers : t?.headers);
+						if (t?.headers) {
+							new Headers(t.headers).forEach((e, t) => i.set(t, e));
+						}
+						i.set("x-cs-r", d);
+						i.set("x-cs-q", l);
+						if ("/api/c/issue" === r.pathname) {
+							i.set("x-cs-p", h);
+						}
+						return e instanceof Request ? boundFetch(new Request(e, { ...t, headers: i })) : boundFetch(e, { ...t, headers: i });
+					}
+					return boundFetch(e, t);
+				};
+				window.fetch = interceptFetch;
+
+				let c1, c2;
+				try {
+					[c1, c2] = await Promise.all([d6.gc(), ss2.gc()]);
+				} finally {
+					window.fetch = origFetch;
+				}
+				return c1 + "::c2::" + c2 + "::c3::" + d;
+			}
+
+			for (let tokenAttempt = 0; tokenAttempt < 3; tokenAttempt++) {
+				let token;
+				try {
+					token = await getCompoundToken();
+				} catch (e) {
+					await new Promise(res => setTimeout(res, 150));
+					continue;
+				}
+
+				let hadInvalidChallenge = false;
+				for (const srv of servers) {
+					try {
+						const streamResp = await fetch(window.location.href, {
+							method: "POST",
+							headers: {
+								"Accept": "text/x-component",
+								"Content-Type": "text/plain;charset=UTF-8",
+								"next-action": "7e401aae5708c04984ff004de286425e0af9166da6",
+								"next-router-state-tree": "%5B%22%22%2C%7B%22children%22%3A%5B%22embed%22%2C%7B%22children%22%3A%5B%5B%22type%22%2C%22" + bType + "%22%2C%22d%22%5D%2C%7B%22children%22%3A%5B%5B%22id%22%2C%22" + i[2] + "%22%2C%22d%22%5D%2C%7B%22children%22%3A%5B%22__PAGE__%22%2C%7B%7D%2Cnull%2Cnull%5D%7D%2Cnull%2Cnull%5D%7D%2Cnull%2Cnull%5D%7D%2Cnull%2Cnull%5D%7D%2Cnull%2Cnull%2Ctrue%5D"
+							},
+							body: JSON.stringify([decodeURIComponent(i[2]), actType, sVal, eVal, token, srv])
+						});
+						const actionText = await streamResp.text();
+						if (actionText.includes("e1:invalid_challenge")) {
+							hadInvalidChallenge = true;
+							break;
+						}
+						if (actionText.includes("e1:")) continue;
+
+						let rawCipher = null;
+						const matchQuote = actionText.match(/[0-9]:"([^"]+)"/);
+						if (matchQuote && matchQuote[1].startsWith("r2.")) {
+							rawCipher = matchQuote[1];
+						} else {
+							const matchFlight = actionText.match(/[0-9]:T[0-9a-fA-F]+,(r2\.[^\n\r]+)/);
+							if (matchFlight) {
+								let str = matchFlight[1];
+								const trailIdx = str.search(/[0-9]:"|\n|\r/);
+								if (trailIdx !== -1) str = str.slice(0, trailIdx);
+								rawCipher = str;
+							}
+						}
+
+						if (!rawCipher) continue;
+						let dec = await d6.dr(rawCipher);
+						if (dec && dec.url && dec.url.length > 0) {
+							return JSON.stringify({ success: true, result: dec });
+						}
+					} catch (e) {
+						// continue
+					}
+				}
+				if (hadInvalidChallenge) {
+					await new Promise(res => setTimeout(res, 150));
+					continue;
+				}
+			}
+			return JSON.stringify({ error: "all cinesrc servers failed" });
+		})()
+	`
+
+	var resJSON string
+	err := chromedp.Run(worker.bCtx,
+		chromedp.Navigate(targetURL),
+		chromedp.Evaluate(evalScript, &resJSON, func(p *runtime.EvaluateParams) *runtime.EvaluateParams {
+			return p.WithAwaitPromise(true)
+		}),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("eval error: %w", err)
+	}
+
+	var res cinesrcDirectResult
+	if err := json.Unmarshal([]byte(resJSON), &res); err != nil {
+		return nil, fmt.Errorf("unmarshal error: %w", err)
+	}
+	if !res.Success || len(res.Result.URL) == 0 {
+		return nil, fmt.Errorf("direct resolve failed: %s", res.Error)
+	}
+
+	hlsURL := strings.TrimSpace(res.Result.URL[0].URL)
+	if hlsURL == "" {
+		return nil, errors.New("empty HLS URL in direct result")
+	}
+
+	headers := make(http.Header)
+	headers.Set("User-Agent", defaultUserAgent)
+	headers.Set("Referer", r.cfg.CineSrcOrigin+"/")
+	headers.Set("Origin", r.cfg.CineSrcOrigin)
 
 	allowed := make(map[string]bool)
-	if u, err := url.Parse(mURL); err == nil {
+	if u, err := url.Parse(hlsURL); err == nil {
 		allowed[strings.ToLower(u.Host)] = true
 	}
 	if ref := headers.Get("Referer"); ref != "" {
@@ -197,59 +408,9 @@ func (r *Resolver) resolveCinesrcFast(ctx context.Context, target string) (*dire
 		}
 	}
 
-	// Single probe to validate and capture MasterText for cache priming in one step.
-	client := &http.Client{Transport: r.transport, Timeout: 10 * time.Second}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, mURL, nil)
-	if err != nil {
-		return &directResolution{Source: mURL, Headers: headers, Allowed: allowed}, nil
-	}
-	for _, k := range playbackHeaders {
-		if v := headers.Get(k); v != "" {
-			req.Header.Set(k, v)
-		}
-	}
-	if req.Header.Get("User-Agent") == "" {
-		req.Header.Set("User-Agent", defaultUserAgent)
-	}
-	req.Header.Set("Accept-Encoding", "identity")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return &directResolution{Source: mURL, Headers: headers, Allowed: allowed}, nil
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == http.StatusOK {
-		body, rerr := io.ReadAll(io.LimitReader(resp.Body, maxManifestBytes))
-		if rerr == nil && len(body) > 0 {
-			textStr := strings.TrimSpace(string(body))
-			if strings.HasPrefix(textStr, "#EXTM3U") {
-				return &directResolution{
-					Source:     mURL,
-					Headers:    headers,
-					Allowed:    allowed,
-					MasterText: textStr,
-				}, nil
-			}
-		}
-	}
-
 	return &directResolution{
-		Source:  mURL,
+		Source:  hlsURL,
 		Headers: headers,
 		Allowed: allowed,
 	}, nil
-}
-
-func (r *Resolver) cinesrcTargetURL(req MediaRequest) (string, error) {
-	origin := r.cfg.CineSrcOrigin
-	if origin == "" {
-		origin = "https://cinesrc.st"
-	}
-	origin = strings.TrimRight(origin, "/")
-	if req.Type == Movie {
-		return origin + "/embed/movie/" + url.PathEscape(req.ID), nil
-	}
-	return fmt.Sprintf("%s/embed/tv/%s?s=%s&e=%s",
-		origin, url.PathEscape(req.ID), url.QueryEscape(req.Season), url.QueryEscape(req.Episode)), nil
 }
