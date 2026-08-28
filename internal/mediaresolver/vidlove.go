@@ -21,9 +21,10 @@ import (
 // to whichever low-tier variant the embed's own hls.js started on.
 const vidloveAPIBase = "https://api.shows.st"
 
-// vidloveServers mirrors the player's source order. Each key is tried in turn;
-// the first one that yields a validated stream wins.
-var vidloveServers = []string{"warden", "cinefreak", "moviebox2", "ipcloud", "tcloud", "vidapi", "moviebox"}
+// vidloveServers lists the upstream sources in priority order. Active servers
+// (vidapi, moviebox) are tried first to avoid multi-second sequential round-trips
+// against defunct sub-sources.
+var vidloveServers = []string{"vidapi", "moviebox", "warden", "cinefreak", "moviebox2", "ipcloud", "tcloud"}
 
 // vidloveResponseCap bounds how much of an API response is read. Responses
 // embed the full TMDB metadata blob, so they are far larger than the source

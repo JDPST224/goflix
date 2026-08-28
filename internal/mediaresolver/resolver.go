@@ -105,25 +105,25 @@ const (
 	// gives the pump enough candidate targets to keep five-plus downloads
 	// busy even on playlists with very short segments, where ten would starve
 	// the window faster than the pump could drain it.
-	prefetchLookahead = 18
+	prefetchLookahead = 24
 	// Provider CDNs reward parallel connections rather than capping total
 	// bandwidth: probes showed a single sequential connection sustaining
 	// 1.7-23 Mbps depending on provider while 4-6 parallel connections
-	// aggregated 51-800+ Mbps. Steady state therefore keeps five read-ahead
+	// aggregated 51-800+ Mbps. Steady state therefore keeps six read-ahead
 	// downloads running alongside the player's local fetches, and the
-	// initial burst runs eight to fill the first window fast. The
+	// initial burst runs ten to fill the first window fast. The
 	// liveFetches knob keeps the player prioritized: while a player-facing
 	// fetch is active, read-ahead drops to prefetchLiveMaxInflight parallel
-	// downloads instead of five, and full parallelism resumes the moment the
+	// downloads instead of six, and full parallelism resumes the moment the
 	// last live fetch drains.
-	prefetchMaxInflight     = 5
-	prefetchInitialInflight = 8
+	prefetchMaxInflight     = 6
+	prefetchInitialInflight = 10
 	// prefetchFailureBackoff waits before re-attempting a segment that failed,
 	// so one bad segment cannot spin the prefetcher into a retry storm.
 	prefetchFailureBackoff = 30 * time.Second
 	// prefetchLiveMaxInflight caps read-ahead parallelism while a player
 	// fetch is active — the reduced player-priority mode in pumpPrefetch.
-	prefetchLiveMaxInflight = 2
+	prefetchLiveMaxInflight = 3
 	// inflightJoinWait bounds how long a player request waits on an already
 	// running download of the same segment before fetching independently.
 	// A read-ahead stuck on a stalled upstream stream must not hold live
@@ -286,6 +286,11 @@ func New(cfg Config) (*Resolver, error) {
 			}
 		}
 	}()
+	// Pre-warm CineSrc headless browser worker in background so the first request resolves fast.
+	go func() {
+		_, _ = getOrInitCineWorker(cfg)
+	}()
+
 	return r, nil
 }
 
@@ -311,6 +316,12 @@ func (r *Resolver) Close() {
 	if r.wasmRuntime != nil {
 		_ = r.wasmRuntime.Close(context.Background())
 	}
+	globalCineWorkerMu.Lock()
+	if globalCineWorker != nil {
+		globalCineWorker.close()
+		globalCineWorker = nil
+	}
+	globalCineWorkerMu.Unlock()
 }
 
 func (r *Resolver) isClosed() bool {

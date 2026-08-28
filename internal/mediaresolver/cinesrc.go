@@ -38,9 +38,9 @@ var (
 )
 
 var cineBlockedPatterns = []string{
-	"*.woff", "*.woff2", "*.ttf", "*.otf", "*.eot",
-	"*.png", "*.webp", "*.svg", "*.ico", "*.jpeg", "*.jpg", "*.gif", "*.avif",
-	"*.css",
+	"*.woff*", "*.woff2*", "*.ttf*", "*.otf*", "*.eot*",
+	"*.png*", "*.webp*", "*.svg*", "*.ico*", "*.jpeg*", "*.jpg*", "*.gif*", "*.avif*",
+	"*.css*",
 	"*init.mp4*", "*playlist_*.jpg*", "*playlist_*.png*", "*playlist_*.jpeg*", "*.ts", "*.m4s",
 	"*image.tmdb.org*",
 	"*api.themoviedb.org*",
@@ -54,6 +54,9 @@ var cineBlockedPatterns = []string{
 	"*gstatic.com*",
 	"*google-analytics.com*",
 	"*googletagmanager.com*",
+	"*speculation*",
+	"*beacon*",
+	"*rum*",
 }
 
 func getOrInitCineWorker(cfg Config) (*cinesrcWorker, error) {
@@ -90,6 +93,7 @@ func getOrInitCineWorker(cfg Config) (*cinesrcWorker, error) {
 		chromedp.Flag("disable-backgrounding-occluded-windows", true),
 		chromedp.Flag("disable-renderer-backgrounding", true),
 		chromedp.Flag("blink-settings", "imagesEnabled=false"),
+		chromedp.Flag("disable-remote-fonts", true),
 	)
 	if cfg.BrowserExecutable != "" {
 		opts = append(opts, chromedp.ExecPath(cfg.BrowserExecutable))
@@ -232,10 +236,10 @@ func (r *Resolver) resolveCinesrcProgrammatic(ctx context.Context, req MediaRequ
 		targetURL += "?s=" + url.QueryEscape(sParam) + "&e=" + url.QueryEscape(eParam)
 	}
 
-	evalScript := `
+	evalScript := fmt.Sprintf(`
 		(async () => {
 			let d6 = null;
-			for (let i = 0; i < 250; i++) {
+			for (let i = 0; i < 400; i++) {
 				d6 = window.__captured_d6;
 				if (d6?.gc && d6?.dr && window.__ss2_challenge?.gc) break;
 				await new Promise(r => setTimeout(r, 10));
@@ -245,17 +249,17 @@ func (r *Resolver) resolveCinesrcProgrammatic(ctx context.Context, req MediaRequ
 			}
 			const ss2 = window.__ss2_challenge;
 
-			let i = window.location.pathname.match(/^\/embed\/(movie|tv)\/([^/]+)\/?$/);
-			if (!i) return JSON.stringify({ error: "bad path: " + window.location.pathname });
+			const bType = %q;
+			const rawID = %q;
+			const r = %q || null;
+			const s = %q || null;
+			const targetURL = %q;
 
-			let r = new URLSearchParams(window.location.search).get("s") || new URLSearchParams(window.location.search).get("season");
-			let s = new URLSearchParams(window.location.search).get("e") || new URLSearchParams(window.location.search).get("episode");
-			let n = new TextEncoder().encode(JSON.stringify([i[1], decodeURIComponent(i[2]), r, s]));
+			let n = new TextEncoder().encode(JSON.stringify([bType, rawID, r, s]));
 			let a = "";
 			for (let e of n) a += String.fromCharCode(e);
 			let l = btoa(a).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
 
-			let bType = i[1];
 			let actType = bType === "movie" ? "movie" : "show";
 			let sVal = r ? String(r) : "$undefined";
 			let eVal = s ? String(s) : "$undefined";
@@ -264,10 +268,10 @@ func (r *Resolver) resolveCinesrcProgrammatic(ctx context.Context, req MediaRequ
 			async function getCompoundToken() {
 				let bResp;
 				let bData;
-				for (let attempt = 0; attempt < 20; attempt++) {
+				for (let attempt = 0; attempt < 25; attempt++) {
 					bResp = await fetch("/api/c/bootstrap", { method: "POST", headers: { "x-cs-q": l }, credentials: "include", cache: "no-store" });
 					if (bResp.status === 428) {
-						await new Promise(res => setTimeout(res, 200));
+						await new Promise(res => setTimeout(res, 50));
 						continue;
 					}
 					if (!bResp.ok) throw Error("bootstrap " + bResp.status);
@@ -313,22 +317,22 @@ func (r *Resolver) resolveCinesrcProgrammatic(ctx context.Context, req MediaRequ
 				try {
 					token = await getCompoundToken();
 				} catch (e) {
-					await new Promise(res => setTimeout(res, 150));
+					await new Promise(res => setTimeout(res, 80));
 					continue;
 				}
 
 				let hadInvalidChallenge = false;
 				for (const srv of servers) {
 					try {
-						const streamResp = await fetch(window.location.href, {
+						const streamResp = await fetch(targetURL, {
 							method: "POST",
 							headers: {
 								"Accept": "text/x-component",
 								"Content-Type": "text/plain;charset=UTF-8",
 								"next-action": "7e401aae5708c04984ff004de286425e0af9166da6",
-								"next-router-state-tree": "%5B%22%22%2C%7B%22children%22%3A%5B%22embed%22%2C%7B%22children%22%3A%5B%5B%22type%22%2C%22" + bType + "%22%2C%22d%22%5D%2C%7B%22children%22%3A%5B%5B%22id%22%2C%22" + i[2] + "%22%2C%22d%22%5D%2C%7B%22children%22%3A%5B%22__PAGE__%22%2C%7B%7D%2Cnull%2Cnull%5D%7D%2Cnull%2Cnull%5D%7D%2Cnull%2Cnull%5D%7D%2Cnull%2Cnull%5D%7D%2Cnull%2Cnull%2Ctrue%5D"
+								"next-router-state-tree": "%%5B%%22%%22%%2C%%7B%%22children%%22%%3A%%5B%%22embed%%22%%2C%%7B%%22children%%22%%3A%%5B%%5B%%22type%%22%%2C%%22" + bType + "%%22%%2C%%22d%%22%%5D%%2C%%7B%%22children%%22%%3A%%5B%%5B%%22id%%22%%2C%%22" + rawID + "%%22%%2C%%22d%%22%%5D%%2C%%7B%%22children%%22%%3A%%5B%%22__PAGE__%%22%%2C%%7B%%7D%%2Cnull%%2Cnull%%5D%%7D%%2Cnull%%2Cnull%%5D%%7D%%2Cnull%%2Cnull%%5D%%7D%%2Cnull%%2Cnull%%5D%%7D%%2Cnull%%2Cnull%%2Ctrue%%5D"
 							},
-							body: JSON.stringify([decodeURIComponent(i[2]), actType, sVal, eVal, token, srv])
+							body: JSON.stringify([rawID, actType, sVal, eVal, token, srv])
 						});
 						const actionText = await streamResp.text();
 						if (actionText.includes("e1:invalid_challenge")) {
@@ -361,17 +365,20 @@ func (r *Resolver) resolveCinesrcProgrammatic(ctx context.Context, req MediaRequ
 					}
 				}
 				if (hadInvalidChallenge) {
-					await new Promise(res => setTimeout(res, 150));
+					await new Promise(res => setTimeout(res, 80));
 					continue;
 				}
 			}
 			return JSON.stringify({ error: "all cinesrc servers failed" });
 		})()
-	`
+	`, bType, req.ID, sParam, eParam, targetURL)
 
 	var resJSON string
 	err := chromedp.Run(worker.bCtx,
-		chromedp.Navigate(targetURL),
+		chromedp.ActionFunc(func(c context.Context) error {
+			_, _, _, _, err := page.Navigate(targetURL).Do(c)
+			return err
+		}),
 		chromedp.Evaluate(evalScript, &resJSON, func(p *runtime.EvaluateParams) *runtime.EvaluateParams {
 			return p.WithAwaitPromise(true)
 		}),

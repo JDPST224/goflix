@@ -501,6 +501,9 @@ func bwDownloadSegments(ctx context.Context, client *http.Client, segs []string,
 				req.Header.Add(k, v)
 			}
 		}
+		if req.Header.Get("Range") == "" {
+			req.Header.Set("Range", "bytes=0-")
+		}
 		reqStart := time.Now()
 		resp, derr := client.Do(req)
 		if derr != nil {
@@ -512,7 +515,7 @@ func bwDownloadSegments(ctx context.Context, client *http.Client, segs []string,
 		if ttfb == 0 {
 			ttfb = time.Since(reqStart) // time to first response headers
 		}
-		if resp.StatusCode != http.StatusOK {
+		if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent {
 			io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
 			resp.Body.Close()
 			if i == 0 {

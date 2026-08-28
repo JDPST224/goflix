@@ -170,6 +170,9 @@ func (r *Resolver) doFetchForCache(ctx context.Context, s *proxySession, rawURL 
 	if req.Header.Get("User-Agent") == "" {
 		req.Header.Set("User-Agent", defaultUserAgent)
 	}
+	if req.Header.Get("Range") == "" && !strings.Contains(strings.ToLower(u.Path), ".m3u8") {
+		req.Header.Set("Range", "bytes=0-")
+	}
 	req.Header.Set("Accept-Encoding", "identity")
 	client := &http.Client{
 		Transport: r.transport,
@@ -219,7 +222,7 @@ func (r *Resolver) doFetchForCache(ctx context.Context, s *proxySession, rawURL 
 	}
 	r.mu.Unlock()
 	result := &cachedFetch{data: data, contentType: resp.Header.Get("Content-Type"), status: resp.StatusCode}
-	if resp.StatusCode == http.StatusOK {
+	if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusPartialContent {
 		ttl := cacheEntryTTL
 		head := data
 		if len(head) > 4096 {
