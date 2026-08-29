@@ -73,15 +73,19 @@ func (r *Resolver) logResolutionStats() {
 // the current one plays, so pressing Next episode replays the cached
 // resolution instantly. Only the record is prepared — the session (and its
 // read-ahead) is minted by the normal cache-hit path when playback actually
-// starts, so nothing is held for an episode that is never watched.
+// starts, so nothing is held for an episode that is never watched. When the
+// played episode is the last of its season, the first episode of the next
+// season is prewarmed instead; at the series end (verified via
+// HasEpisodeProvider, when set) nothing is attempted at all.
 func (r *Resolver) prewarmNextEpisode(req MediaRequest) {
-	next, ok := nextEpisodeNumber(req.Episode)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	target, ok := r.nextPrewarmTarget(ctx, req)
 	if !ok {
-		return
+		return // end of series (or non-numeric episode): nothing to prewarm
 	}
-	nextReq := MediaRequest{Type: TV, ID: req.ID, Season: req.Season, Episode: next, Provider: req.Provider}
-	nextKey := resolutionKey(nextReq)
-	if r.lookupResolution(nextReq) != nil {
+	nextKey := resolutionKey(target)
+	if r.lookupResolution(target) != nil {
 		return // already replayable
 	}
 	if r.isClosed() {
@@ -92,18 +96,50 @@ func (r *Resolver) prewarmNextEpisode(req MediaRequest) {
 	}
 	defer r.prewarms.Delete(nextKey)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	fresh, err := r.resolveDirectAny(ctx, nextReq)
+	fresh, err := r.resolveDirectAny(ctx, target)
 	if err != nil {
 		// Common at season boundaries (episode N+1 does not exist) — keep
 		// the log line cheap and non-alarming.
-		log.Printf("[MediaResolver] next-episode prewarm skipped s%se%s: %v", req.Season, next, err)
+		log.Printf("[MediaResolver] next-episode prewarm skipped s%se%s: %v", target.Season, target.Episode, err)
 		return
 	}
-	r.rememberResolution(nextReq, newResolutionRecord(fresh))
+	r.rememberResolution(target, newResolutionRecord(fresh))
 	r.stats.prewarms.Add(1)
-	log.Printf("[MediaResolver] prewarmed next episode s%se%s provider=%s", req.Season, next, req.Provider)
+	log.Printf("[MediaResolver] prewarmed next episode s%se%s provider=%s", target.Season, target.Episode, target.Provider)
+}
+
+// nextPrewarmTarget picks the episode to prewarm after req: the next episode
+// in the same season, else the first episode of the next season. ok=false
+// means neither exists (verified via HasEpisodeProvider when set), so there
+// is nothing to prewarm.
+func (r *Resolver) nextPrewarmTarget(ctx context.Context, req MediaRequest) (MediaRequest, bool) {
+	next, ok := nextEpisodeNumber(req.Episode)
+	if !ok {
+		return MediaRequest{}, false
+	}
+	sameSeason := MediaRequest{Type: TV, ID: req.ID, Season: req.Season, Episode: next, Provider: req.Provider}
+	if r.episodeMayExist(ctx, sameSeason) {
+		return sameSeason, true
+	}
+	// Season rollover: first episode of the next season.
+	nextSeason, ok := nextEpisodeNumber(req.Season)
+	if !ok || nextSeason == req.Season {
+		return MediaRequest{}, false
+	}
+	rollover := MediaRequest{Type: TV, ID: req.ID, Season: nextSeason, Episode: "1", Provider: req.Provider}
+	if r.episodeMayExist(ctx, rollover) {
+		return rollover, true
+	}
+	return MediaRequest{}, false
+}
+
+// episodeMayExist consults HasEpisodeProvider; when unset it assumes yes so
+// behavior is unchanged for deployments without TMDB credentials.
+func (r *Resolver) episodeMayExist(ctx context.Context, req MediaRequest) bool {
+	if r.HasEpisodeProvider == nil {
+		return true
+	}
+	return r.HasEpisodeProvider(ctx, req.ID, req.Season, req.Episode)
 }
 
 // nextEpisodeNumber returns the episode number following ep, preserving

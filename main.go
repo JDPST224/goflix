@@ -33,10 +33,21 @@ func main() {
 	store.LoadSnapshot()
 
 	// Server-side subtitle ladder: VidKing/VidLove ship no embedded
-	// renditions, so resolve external subtitles during Resolve() and embed
+	// subtitle renditions, so resolve external subtitles during Resolve() and embed
 	// them into the master manifest for native-HLS engines (smart TVs).
 	resolver.SubRenditionProvider = func(ctx context.Context, req mediaresolver.MediaRequest) []mediaresolver.SubRendition {
 		return server.FetchSubRenditions(ctx, client, req)
+	}
+
+	// Next-episode prewarm gate: consult TMDB so the prewarm skips the last
+	// episode of a season (rolling over to the next season's first episode)
+	// and never fires doomed resolves at the end of a series.
+	resolver.HasEpisodeProvider = func(ctx context.Context, id, season, episode string) bool {
+		exists, known := client.EpisodeExists(id, season, episode)
+		if !known {
+			return true // TMDB could not answer: keep the old try-anyway behavior
+		}
+		return exists
 	}
 
 	// Graceful shutdown context: cancelled by SIGTERM or SIGINT. Created here

@@ -177,6 +177,13 @@ type Resolver struct {
 	// into the master manifest as TYPE=SUBTITLES entries so native-HLS
 	// engines (smart TVs) see the tracks without any frontend help.
 	SubRenditionProvider func(ctx context.Context, req MediaRequest) []SubRendition
+	// HasEpisodeProvider, when set, reports whether a TV episode exists
+	// (TMDB). It gates the next-episode prewarm: when the played episode is
+	// the last of its season (or of the series), the prewarm checks the next
+	// season's first episode instead and skips entirely at the series end
+	// instead of firing doomed upstream resolves. When unset, or when the
+	// provider cannot answer, the prewarm attempts as before.
+	HasEpisodeProvider func(ctx context.Context, id, season, episode string) bool
 	// wasmRuntime is the wazero runtime used by the VidSrcMe resolver.
 	// Stored here so it can be closed cleanly on shutdown.
 	wasmRuntime interface{ Close(context.Context) error }

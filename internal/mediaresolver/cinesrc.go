@@ -208,8 +208,17 @@ func (r *Resolver) tryCinesrcDirect(parent context.Context, req MediaRequest) (s
 	return "/api/media/proxy/" + token + ".m3u8", true
 }
 
-// resolveCinesrcDirect acquires a concurrency semaphore slot and executes programmatic resolution.
+// resolveCinesrcDirect resolves cinesrc without a browser when possible: the
+// embedded JS engine (goja + wazero) replays the site's own challenge chain.
+// If it is unavailable — asset names moved, scheme changed — resolution falls
+// back to the browser-based worker below.
 func (r *Resolver) resolveCinesrcDirect(ctx context.Context, req MediaRequest) (*directResolution, error) {
+	if res, err := r.cinesrcJSResolve(ctx, req); err == nil {
+		return res, nil
+	} else {
+		log.Printf("[MediaResolver] cinesrc embedded engine unavailable (%v); falling back to browser worker", err)
+	}
+
 	select {
 	case r.sem <- struct{}{}:
 		defer func() { <-r.sem }()

@@ -9,7 +9,9 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -24,6 +26,9 @@ type Client struct {
 	http   *http.Client
 	token  string // v4 Bearer Read Access Token
 	apiKey string // v3 API key (fallback)
+
+	seasonMu    sync.Mutex
+	seasonCache map[string]seasonCacheEntry
 }
 
 // NewClient builds a client on the shared 15s-timeout HTTP client.
@@ -281,4 +286,105 @@ func (c *Client) ExternalID(mediaType, id, season, episode string) (string, erro
 		return "", fmt.Errorf("no IMDb ID found for %s %s", mediaType, id)
 	}
 	return ext.IMDbID, nil
+}
+
+// seasonCacheEntry is one cached /tv/{id}/season/{s} lookup. absent=true
+// means TMDB answered 404 (the season does not exist); body carries the raw
+// episodes payload otherwise.
+type seasonCacheEntry struct {
+	body     []byte
+	absent   bool
+	fetched  time.Time
+}
+
+const seasonCacheTTL = 12 * time.Hour
+
+// EpisodeExists reports whether the TV episode (id, season, episode) exists
+// in TMDB. known=false means the answer could not be determined (missing
+// credentials, TMDB failure, non-numeric episode); callers should fall back
+// to their default behavior then. Results are cached 12h per season.
+func (c *Client) EpisodeExists(id, season, episode string) (exists, known bool) {
+	if !c.HasCredentials() {
+		return false, false
+	}
+	epNum, err := strconv.Atoi(strings.TrimSpace(episode))
+	if err != nil || epNum < 1 {
+		return false, false
+	}
+	body, ok := c.tvSeason(id, season)
+	if !ok {
+		return false, false
+	}
+	if len(body) == 0 {
+		return false, true // season absent
+	}
+	var doc struct {
+		Episodes []struct {
+			EpisodeNumber int `json:"episode_number"`
+		} `json:"episodes"`
+	}
+	if json.Unmarshal(body, &doc) != nil {
+		return false, false
+	}
+	for _, e := range doc.Episodes {
+		if e.EpisodeNumber == epNum {
+			return true, true
+		}
+	}
+	return false, true
+}
+
+// tvSeason fetches (and caches) /tv/{id}/season/{season}.
+//   - ok=true,  body=nil  → season absent (TMDB 404)
+//   - ok=true,  body=set  → season exists, body is the raw payload
+//   - ok=false            → TMDB failure (unknown)
+func (c *Client) tvSeason(id, season string) ([]byte, bool) {
+	c.seasonMu.Lock()
+	defer c.seasonMu.Unlock()
+	if c.seasonCache == nil {
+		c.seasonCache = map[string]seasonCacheEntry{}
+	}
+	key := id + ":" + season
+	if e, ok := c.seasonCache[key]; ok && time.Since(e.fetched) < seasonCacheTTL {
+		if e.absent {
+			return nil, true
+		}
+		return e.body, true
+	}
+	endpoint := fmt.Sprintf("/tv/%s/season/%s?language=en-US", url.PathEscape(id), url.PathEscape(season))
+	req, err := http.NewRequest("GET", c.buildURL(endpoint), nil)
+	if err != nil {
+		return nil, false
+	}
+	req.Header.Add("accept", "application/json")
+	if c.token != "" {
+		req.Header.Add("Authorization", "Bearer "+c.token)
+	}
+	res, err := c.http.Do(req)
+	if err != nil {
+		return nil, false
+	}
+	defer res.Body.Close()
+
+	entry := seasonCacheEntry{fetched: time.Now()}
+	switch {
+	case res.StatusCode == http.StatusNotFound:
+		entry.absent = true
+	case res.StatusCode == http.StatusOK:
+		body, err := io.ReadAll(io.LimitReader(res.Body, 4<<20))
+		if err != nil {
+			return nil, false
+		}
+		entry.body = body
+	default:
+		return nil, false
+	}
+	if len(c.seasonCache) > 128 {
+		c.seasonCache = map[string]seasonCacheEntry{} // simple bound
+	}
+	c.seasonCache[key] = entry
+	if entry.absent {
+		return nil, true
+	}
+	return entry.body, true
 }
