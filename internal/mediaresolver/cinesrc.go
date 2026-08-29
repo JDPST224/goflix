@@ -185,11 +185,12 @@ func (r *Resolver) tryCinesrcDirect(parent context.Context, req MediaRequest) (s
 		log.Printf("[MediaResolver] cinesrc direct resolve unavailable: %v", err)
 		return "", false
 	}
-	token, err := r.newSession(cr.Source, cr.Headers, cr.Allowed)
+	token, err := r.newSession(resolutionKey(req), cr.Source, cr.Headers, cr.Allowed)
 	if err != nil {
 		log.Printf("[MediaResolver] cinesrc direct session failed: %v", err)
 		return "", false
 	}
+	r.rememberResolution(req, newResolutionRecord(cr))
 	if cr.MasterText != "" {
 		// Admit the validated master under its canonical URL with a long TTL:
 		// warmup and the proxy fast path serve it from RAM instead of

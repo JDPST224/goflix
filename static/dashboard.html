@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#141414">
+    <link rel="icon"
+        href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%23e50914'/%3E%3Ctext x='32' y='45' font-family='Arial, sans-serif' font-size='38' font-weight='900' fill='%23ffffff' text-anchor='middle'%3EG%3C/text%3E%3C/svg%3E">
+    <title>GoFlix — Dashboard</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Outfit:wght@700;800;900&family=Inter:wght@400;500;600;700&display=swap"
+        rel="stylesheet">
+    <style>
+        :root {
+            --bg: #141414;
+            --accent: #e50914;
+            --text: #ffffff;
+            --text-secondary: #b3b3b3;
+            --text-muted: #9a9a9a;
+            --text-faint: #6d6d6d;
+            --ease-out: cubic-bezier(0.5, 0, 0.1, 1);
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            min-height: 100vh;
+            background: var(--bg);
+            font-family: 'Inter', 'Segoe UI', Arial, sans-serif;
+            color: var(--text);
+            padding: 32px 16px 48px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+        }
+
+        /* ── Cinematic backdrop ── */
+        .bg { position: fixed; inset: 0; z-index: 0; overflow: hidden; pointer-events: none; }
+        .orb { position: absolute; border-radius: 50%; filter: blur(90px); will-change: transform; }
+        .orb-a {
+            width: 640px; height: 640px; top: -260px; left: 50%; margin-left: -320px;
+            background: radial-gradient(circle at 50% 50%, rgba(229, 9, 20, 0.20), transparent 65%);
+            animation: drift-a 38s ease-in-out infinite alternate;
+        }
+        .orb-b {
+            width: 720px; height: 720px; bottom: -320px; right: -180px;
+            background: radial-gradient(circle at 50% 50%, rgba(110, 130, 185, 0.11), transparent 65%);
+            animation: drift-b 46s ease-in-out infinite alternate;
+        }
+        @keyframes drift-a {
+            from { transform: translate3d(-60px, 20px, 0) scale(1); }
+            to   { transform: translate3d(80px, -30px, 0) scale(1.12); }
+        }
+        @keyframes drift-b {
+            from { transform: translate3d(40px, -20px, 0) scale(1.05); }
+            to   { transform: translate3d(-70px, 40px, 0) scale(0.95); }
+        }
+        .grain {
+            position: absolute; inset: 0; opacity: 0.05;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+        }
+        .vignette {
+            position: absolute; inset: 0;
+            background: radial-gradient(120% 90% at 50% 40%, transparent 55%, rgba(0, 0, 0, 0.5) 100%);
+        }
+
+        .shell { position: relative; z-index: 1; width: min(760px, 100%); }
+        .wordmark {
+            font-family: 'Outfit', 'Inter', sans-serif;
+            font-size: 1.4rem;
+            font-weight: 900;
+            letter-spacing: 3px;
+            text-align: center;
+            margin-bottom: 26px;
+            user-select: none;
+            background: linear-gradient(180deg, #ff5a52 0%, #e50914 48%, #a20610 100%);
+            -webkit-background-clip: text;
+            background-clip: text;
+            color: transparent;
+            filter: drop-shadow(0 0 16px rgba(229, 9, 20, 0.45));
+            animation: rise 0.55s var(--ease-out) both;
+        }
+        .wordmark a { color: inherit; text-decoration: none; }
+
+        .head-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            margin-bottom: 18px;
+            animation: rise 0.55s var(--ease-out) 0.06s both;
+        }
+        .head-row h1 {
+            font-family: 'Outfit', 'Inter', sans-serif;
+            font-size: 1.5rem;
+            font-weight: 700;
+        }
+        .head-row .sub { font-size: 0.85rem; color: var(--text-muted); margin-top: 3px; }
+        .head-actions { display: flex; gap: 10px; }
+
+        .card {
+            position: relative;
+            background: linear-gradient(180deg, #232323, #1a1a1a);
+            border-radius: 16px;
+            padding: 24px;
+            margin-bottom: 16px;
+            box-shadow:
+                inset 0 1px 0 rgba(255, 255, 255, 0.07),
+                0 18px 50px rgba(0, 0, 0, 0.55);
+            animation: rise 0.55s var(--ease-out) both;
+        }
+        .card:nth-of-type(1) { animation-delay: 0.12s; }
+        .card:nth-of-type(2) { animation-delay: 0.18s; }
+        .card::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            border-radius: inherit;
+            padding: 1px;
+            background: linear-gradient(180deg, rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0.05) 40%, rgba(0, 0, 0, 0.4));
+            -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+            -webkit-mask-composite: xor;
+            mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+            mask-composite: exclude;
+            pointer-events: none;
+        }
+        @keyframes rise {
+            from { opacity: 0; transform: translateY(14px); }
+            to   { opacity: 1; transform: translateY(0); }
+        }
+        .card h2 {
+            font-family: 'Outfit', 'Inter', sans-serif;
+            font-size: 1.02rem;
+            font-weight: 700;
+            margin-bottom: 14px;
+        }
+
+        /* ── Stats ── */
+        .stats { display: flex; gap: 14px; flex-wrap: wrap; }
+        .stat {
+            flex: 1;
+            min-width: 140px;
+            background: rgba(255, 255, 255, 0.04);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 12px;
+            padding: 16px 18px;
+        }
+        .stat .num {
+            font-family: 'Outfit', 'Inter', sans-serif;
+            font-size: 1.9rem;
+            font-weight: 800;
+            line-height: 1;
+        }
+        .stat .lbl {
+            font-size: 0.72rem;
+            font-weight: 600;
+            letter-spacing: 0.6px;
+            text-transform: uppercase;
+            color: var(--text-muted);
+            margin-top: 6px;
+        }
+
+        /* ── Accounts table ── */
+        .table-wrap { overflow-x: auto; }
+        table { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
+        th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid rgba(255, 255, 255, 0.07); }
+        th {
+            color: var(--text-muted);
+            font-weight: 600;
+            font-size: 0.72rem;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+        }
+        tr:last-child td { border-bottom: 0; }
+        .user-cell { display: flex; align-items: center; gap: 10px; }
+        .user-avatar {
+            width: 30px; height: 30px; min-width: 30px;
+            border-radius: 50%;
+            object-fit: cover;
+            background: rgba(255, 255, 255, 0.06);
+        }
+        .role-badge {
+            font-size: 0.6rem;
+            font-weight: 700;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            color: #ffb3b3;
+            background: rgba(229, 9, 20, 0.16);
+            border: 1px solid rgba(229, 9, 20, 0.35);
+            border-radius: 999px;
+            padding: 2px 8px;
+            margin-left: 8px;
+            white-space: nowrap;
+        }
+        td .muted { color: var(--text-muted); }
+
+        button.btn {
+            padding: 7px 12px;
+            border: 0;
+            border-radius: 8px;
+            background: rgba(255, 255, 255, 0.08);
+            color: var(--text-secondary);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            font-size: 0.78rem;
+            font-weight: 600;
+            font-family: inherit;
+            cursor: pointer;
+            margin: 2px 4px 2px 0;
+            transition: background 0.15s ease, color 0.15s ease;
+        }
+        button.btn:hover { background: rgba(255, 255, 255, 0.14); color: #fff; }
+        button.btn.danger {
+            background: rgba(229, 9, 20, 0.14);
+            color: #ff8080;
+            border-color: rgba(229, 9, 20, 0.35);
+        }
+        button.btn.danger:hover { background: rgba(229, 9, 20, 0.28); color: #fff; }
+        button.btn.head {
+            padding: 10px 18px;
+            font-size: 0.9rem;
+            margin: 0;
+        }
+        button.btn.primary {
+            background: #fff;
+            color: #111;
+            border-color: #fff;
+        }
+        button.btn.primary:hover {
+            background: rgba(255, 255, 255, 0.9);
+            color: #111;
+            box-shadow: 0 0 16px rgba(255, 255, 255, 0.35);
+        }
+
+        .msg { font-size: 0.85rem; margin-top: 12px; min-height: 1.2em; }
+        .msg.ok { color: #6ee7a0; }
+        .msg.err { color: #ff6b6b; }
+        .empty { color: var(--text-muted); font-size: 0.88rem; padding: 18px 0; text-align: center; }
+
+        @media (prefers-reduced-motion: reduce) {
+            *, *::before, *::after {
+                animation-duration: 0.01ms !important;
+                animation-iteration-count: 1 !important;
+                transition-duration: 0.01ms !important;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="bg" aria-hidden="true">
+        <div class="orb orb-a"></div>
+        <div class="orb orb-b"></div>
+        <div class="grain"></div>
+        <div class="vignette"></div>
+    </div>
+
+    <div class="shell">
+        <div class="wordmark"><a href="/">GOFLIX</a></div>
+
+        <div class="head-row">
+            <div>
+                <h1>Dashboard</h1>
+                <div class="sub">Manage accounts on this GoFlix instance.</div>
+            </div>
+            <div class="head-actions">
+                <button type="button" class="btn head" id="back-btn">Back to GoFlix</button>
+                <button type="button" class="btn head" id="account-btn">My account</button>
+                <button type="button" class="btn head" id="logout-btn">Sign out</button>
+            </div>
+        </div>
+
+        <section class="card">
+            <h2>Overview</h2>
+            <div class="stats">
+                <div class="stat">
+                    <div class="num" id="stat-accounts">–</div>
+                    <div class="lbl">Accounts</div>
+                </div>
+                <div class="stat">
+                    <div class="num" id="stat-sessions">–</div>
+                    <div class="lbl">Active sessions</div>
+                </div>
+            </div>
+        </section>
+
+        <section class="card">
+            <h2>Accounts</h2>
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>User</th>
+                            <th>Email</th>
+                            <th>Created</th>
+                            <th>Sessions</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody id="users-body">
+                        <tr><td colspan="5" class="empty">Loading…</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <div class="msg" id="admin-msg"></div>
+        </section>
+    </div>
+
+<script src="/js/dashboard.js"></script>
+</body>
+</html>

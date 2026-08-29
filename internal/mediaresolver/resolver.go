@@ -53,6 +53,10 @@ type Config struct {
 	// New Resolve calls return an error when the cap is reached.
 	// Defaults to 200 when <= 0.
 	MaxSessions int
+	// ResolutionCachePath is the file the resolution cache persists to
+	// across restarts. Defaults to "resolutions.json" in the working
+	// directory; "-" disables persistence.
+	ResolutionCachePath string
 }
 
 // playbackHeaders are the browser headers captured during resolution and
@@ -128,7 +132,7 @@ const (
 	// running download of the same segment before fetching independently.
 	// A read-ahead stuck on a stalled upstream stream must not hold live
 	// playback hostage for its entire timeout window.
-	inflightJoinWait = 4 * time.Second
+	inflightJoinWait = 1500 * time.Millisecond
 
 	// defaultMaxSessions is the cap on concurrent proxy sessions when
 	// Config.MaxSessions is not set.
@@ -142,6 +146,20 @@ type Resolver struct {
 	closed   bool
 	done     chan struct{} // closed by Close() to wake the sweeper goroutine immediately
 	sessions map[string]*proxySession
+	// resolutions remembers validated upstream sources per request key so a
+	// rewatch replays instantly (see resolution_cache.go).
+	resolutions map[string]*resolutionRecord
+	// healMu serializes background revalidation+heal work (rare and short).
+	healMu sync.Mutex
+	// persistMu serializes writes of the resolution cache to disk.
+	persistMu sync.Mutex
+	// flights dedupes concurrent fresh resolves of the same request key.
+	flightMu sync.Mutex
+	flights  map[string]*resolveFlight
+	// prewarms dedupes concurrent next-episode prewarm goroutines.
+	prewarms sync.Map
+	// stats are the resolution-cache counters surfaced by /api/health.
+	stats resolutionStats
 	// transport is shared across proxy requests for connection reuse.
 	transport *http.Transport
 	// blockCache memoizes per-hostname SSRF checks (hostname -> blocked).
@@ -212,8 +230,10 @@ func New(cfg Config) (*Resolver, error) {
 	r := &Resolver{
 		cfg:      cfg,
 		sem:      make(chan struct{}, cfg.MaxBrowserSessions),
-		done:     make(chan struct{}),
-		sessions: make(map[string]*proxySession),
+		done:        make(chan struct{}),
+		sessions:    make(map[string]*proxySession),
+		resolutions: make(map[string]*resolutionRecord),
+		flights:     make(map[string]*resolveFlight),
 		cache:    newBodyCache(cacheMax),
 		transport: &http.Transport{
 			Proxy: http.ProxyFromEnvironment,
@@ -245,17 +265,28 @@ func New(cfg Config) (*Resolver, error) {
 			WriteBufferSize: 128 * 1024,
 		},
 	}
+	// Restore resolutions persisted by a previous run so rewatches stay
+	// instant across restarts.
+	r.loadPersistedResolutions()
 	// Periodically sweep expired proxy sessions so memory doesn't grow
 	// indefinitely. The done channel lets Close() wake the goroutine instantly
 	// instead of waiting up to 5 minutes for the next tick.
 	go func() {
 		ticker := time.NewTicker(5 * time.Minute)
 		defer ticker.Stop()
+		ticks := 0
 		for {
 			select {
 			case <-r.done:
 				return
 			case <-ticker.C:
+				ticks++
+				// Roughly hourly: report the resolution cache's hit rate so
+				// the cache's value is observable in practice, not just by
+				// design. Quiet when nothing was resolved at all.
+				if ticks%12 == 0 {
+					r.logResolutionStats()
+				}
 				now := time.Now()
 				var cancels []context.CancelFunc
 				r.mu.Lock()
@@ -361,6 +392,53 @@ func (r *Resolver) Resolve(parent context.Context, req MediaRequest) (string, er
 	if r.isClosed() {
 		return "", errors.New("resolver is closed")
 	}
+	// Seamless rewatch: a remembered, validated resolution replays instantly
+	// from RAM — no upstream round trip happens before playback starts. The
+	// remembered link is re-validated in the background; a stale record is
+	// healed mid-session or dropped for the next attempt.
+	if proxyURL, ok := r.tryCachedResolution(req); ok {
+		r.stats.hits.Add(1)
+		if req.Type == TV {
+			go r.prewarmNextEpisode(req)
+		}
+		return proxyURL, nil
+	}
+	r.stats.misses.Add(1)
+
+	// Single-flight: concurrent resolves of the same title (double-play,
+	// retry storm, two tabs) share one resolve chain instead of racing
+	// through it twice. Different titles never block each other.
+	key := resolutionKey(req)
+	r.flightMu.Lock()
+	if fl, open := r.flights[key]; open {
+		r.flightMu.Unlock()
+		select {
+		case res := <-fl.done:
+			return res.proxyURL, res.err
+		case <-parent.Done():
+			return "", parent.Err()
+		}
+	}
+	fl := &resolveFlight{done: make(chan flightResult, 1)}
+	r.flights[key] = fl
+	r.flightMu.Unlock()
+	defer func() {
+		r.flightMu.Lock()
+		delete(r.flights, key)
+		r.flightMu.Unlock()
+	}()
+
+	proxyURL, err := r.resolveFresh(parent, req)
+	fl.done <- flightResult{proxyURL: proxyURL, err: err}
+	if err == nil && req.Type == TV && !r.isClosed() {
+		go r.prewarmNextEpisode(req)
+	}
+	return proxyURL, err
+}
+
+// resolveFresh runs the full resolve chain: the provider's direct path when
+// available, then the generic browser scrape fallback.
+func (r *Resolver) resolveFresh(parent context.Context, req MediaRequest) (string, error) {
 	// vidlove and vixsrc are resolved directly against their own endpoints
 	// instead of a browser scrape — faster startup, and quality is guaranteed:
 	// vidlove's embed hands its player the master manifest inline (scraping can
@@ -422,10 +500,15 @@ func (r *Resolver) Resolve(parent context.Context, req MediaRequest) (string, er
 		log.Printf("[MediaResolver] Resolving %s (attempt %d/%d)", redactQuery(target), attempt, maxAttempts)
 		source, headers, allowed, err := r.resolveInBrowser(parent, target)
 		if err == nil {
-			token, err := r.newSession(source, headers, allowed)
+			token, err := r.newSession(resolutionKey(req), source, headers, allowed)
 			if err != nil {
 				return "", err
 			}
+			// Remember the browser resolution too — its master manifest was
+			// never captured, so validation falls back to a prefix check.
+			r.rememberResolution(req, newResolutionRecord(&directResolution{
+				Source: source, Headers: headers, Allowed: allowed,
+			}))
 			// Providers without embedded renditions get their subtitles
 			// resolved server-side and embedded into the master manifest;
 			// warm the chain so playback begins from RAM either way.

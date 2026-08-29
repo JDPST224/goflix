@@ -27,6 +27,10 @@ func main() {
 
 	client := catalog.NewClient(cfg.TMDBAccessToken, cfg.TMDBAPIKey)
 	store := catalog.NewStore(client)
+	store.SetSnapshotPath(cfg.CatalogSnapshotFile)
+	// Serve the last good catalog from disk immediately; the refresh loop
+	// below replaces it once TMDB answers.
+	store.LoadSnapshot()
 
 	// Server-side subtitle ladder: VidKing/VidLove ship no embedded
 	// renditions, so resolve external subtitles during Resolve() and embed
@@ -56,10 +60,18 @@ func main() {
 	}
 
 	handler := server.New(&server.Deps{
-		Resolver:  resolver,
-		Store:     store,
-		Client:    client,
-		StartedAt: time.Now(),
+		Resolver:          resolver,
+		Store:             store,
+		Client:            client,
+		StartedAt:         time.Now(),
+		Auth:              server.NewAuthStore(cfg.UsersFile, cfg.AuthPassword),
+		UserData:          server.NewUserDataStore(cfg.UserDataFile),
+		DebugProfiling:    cfg.DebugProfiling,
+		AuthRatePerMin:    cfg.AuthRatePerMin,
+		ResolveRatePerMin: cfg.ResolveRatePerMin,
+		SecureCookies:     cfg.TLSCert != "" && cfg.TLSKey != "",
+		ImagesDir:         cfg.ImagesDir,
+		MaxStreamHeight:   cfg.MaxStreamHeight,
 	})
 
 	listenAddr := cfg.ListenAddr
@@ -80,6 +92,13 @@ func main() {
 	// connections and release browser sessions before exiting.
 
 	go func() {
+		if cfg.TLSCert != "" && cfg.TLSKey != "" {
+			log.Printf("Server listening on https://%s\n", listenAddr)
+			if err := srv.ListenAndServeTLS(cfg.TLSCert, cfg.TLSKey); err != nil && err != http.ErrServerClosed {
+				log.Fatal("Error starting server: ", err)
+			}
+			return
+		}
 		log.Printf("Server listening on %s\n", listenAddr)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatal("Error starting server: ", err)

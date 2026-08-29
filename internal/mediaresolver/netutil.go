@@ -5,6 +5,7 @@ package mediaresolver
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log"
 	"net"
@@ -46,6 +47,15 @@ func doWithRetry(ctx context.Context, logPrefix string, attempt func() (*http.Re
 		if err == nil {
 			io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
 			resp.Body.Close()
+		}
+		if errors.Is(err, context.Canceled) || ctx.Err() != nil {
+			// The caller is gone (player disconnect, healer done) — its
+			// context is dead, so retrying would only log noise and burn
+			// time against a dead request. Transport-level timeouts (e.g.
+			// "http2: timeout awaiting response headers") are different:
+			// the context is still alive and a retry on a fresh host
+			// typically succeeds.
+			return nil, err
 		}
 		if err != nil && n >= upstreamAttempts {
 			return nil, err

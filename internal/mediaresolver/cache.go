@@ -231,12 +231,16 @@ func (r *Resolver) doFetchForCache(ctx context.Context, s *proxySession, rawURL 
 	result := &cachedFetch{data: data, contentType: resp.Header.Get("Content-Type"), status: resp.StatusCode}
 	if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusPartialContent {
 		ttl := cacheEntryTTL
-		head := data
-		if len(head) > 4096 {
-			head = head[:4096]
-		}
-		if strings.Contains(string(head), "#EXTM3U") {
+		if strings.Contains(string(data), "#EXTM3U") {
+			// Playlists default to a short TTL so live-style refreshes
+			// still reach upstream. A VOD playlist (marked complete by
+			// EXT-X-ENDLIST) is immutable — some providers even hand out
+			// single-use playlist tokens, where any refetch stalls — so
+			// VOD playlists cache for the full entry lifetime.
 			ttl = playlistCacheTTL
+			if strings.Contains(string(data), "#EXT-X-ENDLIST") {
+				ttl = cacheEntryTTL
+			}
 		}
 		r.cache.put(&cacheEntry{
 			key:         rawURL,

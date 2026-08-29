@@ -19,6 +19,38 @@ func writeCatalogJSON(w http.ResponseWriter, v any) {
 	}
 }
 
+// imageProxyURL routes a catalog image through the disk-cached /api/img
+// proxy. Non-TMDB URLs pass through untouched; a disabled cache ("-" config)
+// keeps direct CDN URLs.
+func (d *Deps) imageProxyURL(u string) string {
+	if u == "" || d.ImagesDir == "" || !strings.Contains(u, "image.tmdb.org") {
+		return u
+	}
+	return "/api/img?u=" + url.QueryEscape(u)
+}
+
+// proxiedMovies copies the list, pointing banner/thumbnail at the image
+// proxy. The copy matters: the source slices back the Store's shared cache.
+func (d *Deps) proxiedMovies(list []catalog.Movie) []catalog.Movie {
+	out := make([]catalog.Movie, len(list))
+	for i, m := range list {
+		m.Banner = d.imageProxyURL(m.Banner)
+		m.Thumbnail = d.imageProxyURL(m.Thumbnail)
+		out[i] = m
+	}
+	return out
+}
+
+// trimRows drops the description — the heaviest field — from list payloads
+// that never render it (rows, grids). Hero and detail views use /api/home
+// and /api/detail, which keep descriptions.
+func trimRows(list []catalog.Movie) []catalog.Movie {
+	for i := range list {
+		list[i].Description = ""
+	}
+	return list
+}
+
 func (d *Deps) moviesHandler(w http.ResponseWriter, r *http.Request) {
 	if !jsonGate(w, r) {
 		return
@@ -28,7 +60,7 @@ func (d *Deps) moviesHandler(w http.ResponseWriter, r *http.Request) {
 	if movies == nil {
 		movies = []catalog.Movie{}
 	}
-	writeCatalogJSON(w, movies)
+	writeCatalogJSON(w, trimRows(d.proxiedMovies(movies)))
 }
 
 // tvShowsHandler serves the cached TV show list.
@@ -41,7 +73,7 @@ func (d *Deps) tvShowsHandler(w http.ResponseWriter, r *http.Request) {
 	if shows == nil {
 		shows = []catalog.Movie{}
 	}
-	writeCatalogJSON(w, shows)
+	writeCatalogJSON(w, trimRows(d.proxiedMovies(shows)))
 }
 
 func (d *Deps) popularHandler(w http.ResponseWriter, r *http.Request) {
@@ -53,7 +85,7 @@ func (d *Deps) popularHandler(w http.ResponseWriter, r *http.Request) {
 	if pop == nil {
 		pop = []catalog.Movie{}
 	}
-	writeCatalogJSON(w, pop)
+	writeCatalogJSON(w, trimRows(d.proxiedMovies(pop)))
 }
 
 // providersHandler serves the cached "Only on …" carousel map, keyed by
@@ -67,7 +99,11 @@ func (d *Deps) providersHandler(w http.ResponseWriter, r *http.Request) {
 	if providers == nil {
 		providers = map[string][]catalog.Movie{}
 	}
-	writeCatalogJSON(w, providers)
+	proxied := make(map[string][]catalog.Movie, len(providers))
+	for k, list := range providers {
+		proxied[k] = trimRows(d.proxiedMovies(list))
+	}
+	writeCatalogJSON(w, proxied)
 }
 
 func (d *Deps) homeHandler(w http.ResponseWriter, r *http.Request) {
@@ -79,7 +115,8 @@ func (d *Deps) homeHandler(w http.ResponseWriter, r *http.Request) {
 	if combined == nil {
 		combined = []catalog.Movie{}
 	}
-	writeCatalogJSON(w, combined)
+	// Home keeps descriptions: the hero banner renders them inline.
+	writeCatalogJSON(w, d.proxiedMovies(combined))
 }
 
 // searchHandler proxies TMDB search. type=movie/tv selects a scoped search;
@@ -113,7 +150,7 @@ func (d *Deps) searchHandler(w http.ResponseWriter, r *http.Request) {
 	if results == nil {
 		results = []catalog.Movie{}
 	}
-	writeCatalogJSON(w, results)
+	writeCatalogJSON(w, d.proxiedMovies(results))
 }
 
 // discoverHandler serves one page of TMDB discover results for a genre,
@@ -159,7 +196,7 @@ func (d *Deps) discoverHandler(w http.ResponseWriter, r *http.Request) {
 		if results == nil {
 			results = []catalog.Movie{}
 		}
-		writeCatalogJSON(w, results)
+		writeCatalogJSON(w, trimRows(d.proxiedMovies(results)))
 		return
 	}
 	mediaType := strings.TrimSpace(r.URL.Query().Get("type"))
@@ -186,7 +223,7 @@ func (d *Deps) discoverHandler(w http.ResponseWriter, r *http.Request) {
 	if results == nil {
 		results = []catalog.Movie{}
 	}
-	writeCatalogJSON(w, results)
+	writeCatalogJSON(w, trimRows(d.proxiedMovies(results)))
 }
 
 // detailHandler passes the TMDB detail payload through with the modal's

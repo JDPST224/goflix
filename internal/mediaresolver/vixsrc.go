@@ -93,11 +93,12 @@ func (r *Resolver) tryVixsrcDirect(parent context.Context, req MediaRequest) (st
 		log.Printf("[MediaResolver] vixsrc direct resolve unavailable (%v); falling back to browser scrape", err)
 		return "", false
 	}
-	token, err := r.newSession(vr.Source, vr.Headers, vr.Allowed)
+	token, err := r.newSession(resolutionKey(req), vr.Source, vr.Headers, vr.Allowed)
 	if err != nil {
 		log.Printf("[MediaResolver] vixsrc direct session failed (%v); falling back to browser scrape", err)
 		return "", false
 	}
+	r.rememberResolution(req, newResolutionRecord(vr))
 	if vr.MasterText != "" {
 		// Admit the freshly fetched master under its canonical URL with a long
 		// TTL: it is a VOD manifest whose tokenized rendition URLs outlive the

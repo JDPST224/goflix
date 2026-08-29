@@ -47,6 +47,13 @@ type directResolution struct {
 	// body cache so warmup and the proxy fast path serve the master without a
 	// redundant upstream fetch.
 	MasterText string
+	// NoRevalidate marks sources whose manifest cannot be meaningfully
+	// re-fetched later — e.g. vidlove's master arrives inline from a dynamic
+	// API endpoint, and the bare source URL serves no playlist. Resolution
+	// cache records built from these trust the stored manifest until their
+	// TTL instead of background-revalidating (which always failed and
+	// triggered pointless re-resolves).
+	NoRevalidate bool
 }
 
 type vidloveSource struct {
@@ -74,11 +81,12 @@ func (r *Resolver) tryVidloveDirect(parent context.Context, req MediaRequest) (s
 		log.Printf("[MediaResolver] vidlove direct resolve unavailable (%v); falling back to browser scrape", err)
 		return "", false
 	}
-	token, err := r.newSession(vr.Source, vr.Headers, vr.Allowed)
+	token, err := r.newSession(resolutionKey(req), vr.Source, vr.Headers, vr.Allowed)
 	if err != nil {
 		log.Printf("[MediaResolver] vidlove direct session failed (%v); falling back to browser scrape", err)
 		return "", false
 	}
+	r.rememberResolution(req, newResolutionRecord(vr))
 	if vr.MasterText != "" {
 		// Admit the master under its canonical URL with a long TTL: this is a
 		// VOD master whose variant list never changes. Warmup and the proxy
@@ -250,7 +258,7 @@ func (r *Resolver) finishVidloveSource(ctx context.Context, src vidloveSource, b
 		text := strings.TrimSpace(*src.Manifest)
 		if strings.HasPrefix(text, "#EXTM3U") &&
 			(strings.Contains(text, "#EXT-X-STREAM-INF") || strings.Contains(text, "#EXTINF")) {
-			return &directResolution{Source: primary, Headers: cloneHeader(baseHeaders), Allowed: allowed, MasterText: text}, nil
+			return &directResolution{Source: primary, Headers: cloneHeader(baseHeaders), Allowed: allowed, MasterText: text, NoRevalidate: true}, nil
 		}
 	}
 
@@ -269,7 +277,9 @@ func (r *Resolver) finishVidloveSource(ctx context.Context, src vidloveSource, b
 		if !ok {
 			continue
 		}
-		res := &directResolution{Source: cand, Headers: cloneHeader(baseHeaders), Allowed: map[string]bool{strings.ToLower(cu.Host): true}}
+		// Vidlove playlist URLs embed single-use API tokens — they may not
+		// re-serve later, so these records never revalidate either.
+		res := &directResolution{Source: cand, Headers: cloneHeader(baseHeaders), Allowed: map[string]bool{strings.ToLower(cu.Host): true}, NoRevalidate: true}
 		if master {
 			return res, nil
 		}

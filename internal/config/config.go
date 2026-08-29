@@ -24,6 +24,37 @@ type Config struct {
 	TMDBAPIKey      string
 	// ListenAddr is the TCP address the HTTP server binds to (default :8080).
 	ListenAddr string
+	// AuthPassword enables the shared-password gate when set. Empty disables
+	// authentication entirely (previous behavior).
+	AuthPassword string
+	// UsersFile is the JSON file accounts and sessions persist to.
+	// Defaults to "users.json"; "-" disables persistence.
+	UsersFile string
+	// UserDataFile is the JSON file the cross-device userdata sync persists
+	// to. Defaults to "userdata.json"; "-" disables persistence.
+	UserDataFile string
+	// CatalogSnapshotFile is the JSON file the catalog caches persist to
+	// across restarts. Defaults to "catalog_snapshot.json"; "-" disables.
+	CatalogSnapshotFile string
+	// DebugProfiling mounts the pprof endpoints under /debug/pprof/.
+	DebugProfiling bool
+	// AuthRatePerMin caps login/register attempts per client IP (default 10).
+	AuthRatePerMin int
+	// ResolveRatePerMin caps media-source resolutions per client IP
+	// (default 10).
+	ResolveRatePerMin int
+	// TLSCert/TLSKey enable HTTPS when both are set; session cookies get
+	// the Secure flag automatically.
+	TLSCert string
+	TLSKey  string
+	// ImagesDir is the disk cache for the /api/img poster proxy. Posters
+	// stream straight from the TMDB CDN by default; set a folder name to
+	// cache them on disk instead.
+	ImagesDir string
+	// MaxStreamHeight caps playback resolution (e.g. 1080 caps 4K streams
+	// to 1080p, multiplying concurrent-viewer capacity on a fixed pipe).
+	// 0 = uncapped (default; playback starts at the top tier).
+	MaxStreamHeight int
 }
 
 // Load parses path (typically "config.conf") on top of the built-in defaults,
@@ -33,6 +64,12 @@ type Config struct {
 func Load(path string) (Config, error) {
 	cfg := Config{
 		ListenAddr: ":8080",
+		// Persistence paths default next to the executable's working
+		// directory; "-" disables a store.
+		UserDataFile:        "userdata.json",
+		CatalogSnapshotFile: "catalog_snapshot.json",
+		UsersFile:           "users.json",
+		ImagesDir:           "-",
 		Resolver: mediaresolver.Config{
 			TargetOrigin:            "https://vixsrc.to",
 			VidKingOrigin:           "https://www.vidking.net",
@@ -92,6 +129,8 @@ func Load(path string) (Config, error) {
 			if v, err := strconv.Atoi(val); err == nil && v > 0 {
 				cfg.Resolver.MaxSessions = v
 			}
+		case "RESOLUTION_CACHE_FILE":
+			cfg.Resolver.ResolutionCachePath = cleanConfigValue(val)
 		case "BROWSER_EXECUTABLE":
 			cfg.Resolver.BrowserExecutable = val
 		case "CACHE_MAX_MB":
@@ -110,6 +149,36 @@ func Load(path string) (Config, error) {
 			cfg.Resolver.VidsrcmeDataOrigin = cleanConfigValue(val)
 		case "CINESRC_ORIGIN":
 			cfg.Resolver.CineSrcOrigin = cleanConfigValue(val)
+		case "AUTH_PASSWORD":
+			cfg.AuthPassword = cleanConfigValue(val)
+		case "USERDATA_FILE":
+			cfg.UserDataFile = cleanConfigValue(val)
+		case "USERS_FILE":
+			cfg.UsersFile = cleanConfigValue(val)
+		case "CATALOG_SNAPSHOT_FILE":
+			cfg.CatalogSnapshotFile = cleanConfigValue(val)
+		case "DEBUG_PPROF":
+			if v, err := strconv.ParseBool(val); err == nil {
+				cfg.DebugProfiling = v
+			}
+		case "AUTH_RATE_PER_MIN":
+			if v, err := strconv.Atoi(val); err == nil && v > 0 {
+				cfg.AuthRatePerMin = v
+			}
+		case "RESOLVE_RATE_PER_MIN":
+			if v, err := strconv.Atoi(val); err == nil && v > 0 {
+				cfg.ResolveRatePerMin = v
+			}
+		case "TLS_CERT":
+			cfg.TLSCert = cleanConfigValue(val)
+		case "TLS_KEY":
+			cfg.TLSKey = cleanConfigValue(val)
+		case "IMAGES_DIR":
+			cfg.ImagesDir = cleanConfigValue(val)
+		case "MAX_STREAM_HEIGHT":
+			if v, err := strconv.Atoi(val); err == nil && v >= 0 {
+				cfg.MaxStreamHeight = v
+			}
 		}
 	}
 
@@ -148,6 +217,9 @@ func applyEnvOverrides(cfg *Config) {
 			cfg.Resolver.MaxSessions = n
 		}
 	}
+	if v := os.Getenv("RESOLUTION_CACHE_FILE"); strings.TrimSpace(v) != "" {
+		cfg.Resolver.ResolutionCachePath = cleanConfigValue(v)
+	}
 	if v := os.Getenv("BROWSER_EXECUTABLE"); v != "" {
 		cfg.Resolver.BrowserExecutable = v
 	}
@@ -173,6 +245,47 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if v := os.Getenv("CINESRC_ORIGIN"); v != "" {
 		cfg.Resolver.CineSrcOrigin = v
+	}
+	if v := os.Getenv("AUTH_PASSWORD"); strings.TrimSpace(v) != "" {
+		cfg.AuthPassword = cleanConfigValue(v)
+	}
+	if v := os.Getenv("USERDATA_FILE"); strings.TrimSpace(v) != "" {
+		cfg.UserDataFile = cleanConfigValue(v)
+	}
+	if v := os.Getenv("USERS_FILE"); strings.TrimSpace(v) != "" {
+		cfg.UsersFile = cleanConfigValue(v)
+	}
+	if v := os.Getenv("CATALOG_SNAPSHOT_FILE"); strings.TrimSpace(v) != "" {
+		cfg.CatalogSnapshotFile = cleanConfigValue(v)
+	}
+	if v := os.Getenv("DEBUG_PPROF"); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			cfg.DebugProfiling = b
+		}
+	}
+	if v := os.Getenv("AUTH_RATE_PER_MIN"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.AuthRatePerMin = n
+		}
+	}
+	if v := os.Getenv("RESOLVE_RATE_PER_MIN"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.ResolveRatePerMin = n
+		}
+	}
+	if v := os.Getenv("TLS_CERT"); strings.TrimSpace(v) != "" {
+		cfg.TLSCert = cleanConfigValue(v)
+	}
+	if v := os.Getenv("TLS_KEY"); strings.TrimSpace(v) != "" {
+		cfg.TLSKey = cleanConfigValue(v)
+	}
+	if v := os.Getenv("IMAGES_DIR"); strings.TrimSpace(v) != "" {
+		cfg.ImagesDir = cleanConfigValue(v)
+	}
+	if v := os.Getenv("MAX_STREAM_HEIGHT"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			cfg.MaxStreamHeight = n
+		}
 	}
 	if v := os.Getenv("TMDB_ACCESS_TOKEN"); strings.TrimSpace(v) != "" {
 		cfg.TMDBAccessToken = cleanConfigValue(v)

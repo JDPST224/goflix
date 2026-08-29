@@ -3,7 +3,8 @@ import { svgPlaceholder, PLACEHOLDER_POSTER, LIST_CHECK_SVG, LIST_PLUS_SVG,
          formatPlayerTime, isHlsServer } from './utils.js';
 import { getMyList, saveMyList, isInMyList, toggleMyList, getProgress,
          saveProgress, addToContinueWatching, getContinueWatching,
-         removeFromContinueWatching } from './storage.js';
+         removeFromContinueWatching, clearLocalUserData,
+         getAVPrefs, saveAVPrefs, isWatched } from './storage.js';
 
 document.addEventListener('DOMContentLoaded', () => {
     // ─── DOM References ──────────────────────────────────────────────────────
@@ -24,6 +25,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const profileWrap         = document.getElementById('profile-wrap');
     const profileBtn          = document.getElementById('profile-btn');
     const profileMenuMyList   = document.getElementById('profile-menu-mylist');
+    const profileMenuDashboard= document.getElementById('profile-menu-dashboard');
     const profileMenuAccount  = document.getElementById('profile-menu-account');
     const profileMenuSignout  = document.getElementById('profile-menu-signout');
     const carouselsContainer  = document.getElementById('carousels-container');
@@ -41,6 +43,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const playerControlsTop   = document.getElementById('player-controls-top');
     const playerLoader        = document.getElementById('player-loader');
     const playerNextEp        = document.getElementById('player-next-ep');
+    const playerNextOverlay   = document.getElementById('player-next-overlay');
     const playerEpListBtn     = document.getElementById('player-ep-list-btn');
     const playerEpPanel       = document.getElementById('player-ep-panel');
     const playerEpSeasonSelect= document.getElementById('player-ep-season-select');
@@ -166,6 +169,11 @@ document.addEventListener('DOMContentLoaded', () => {
     let catalogRequestId  = 0;
     let detailRequestId   = 0;
     let playerRequestId   = 0;
+    // One silent fresh-resolve retry per playback: a fatal HLS error whose
+    // recovery ladder exhausted may mean the upstream link went stale. The
+    // player then drops the remembered resolution server-side and relaunches
+    // once — the user sees the loader, not an error card. Reset on 'playing'.
+    let playerFreshResolveRetried = false;
     // Aborts an in-flight source-resolution fetch when the player closes or a
     // new title launches, so the server-side browser session is released
     // instead of running to completion for a viewer who already left.
@@ -355,14 +363,62 @@ document.addEventListener('DOMContentLoaded', () => {
         primaryNavigation?.classList.remove('open');
         switchPage('mylist');
     });
+    profileMenuDashboard?.addEventListener('click', () => {
+        closeProfileMenu();
+        location.href = '/dashboard';
+    });
+    // Playback policy from the server (quality cap, 0 = uncapped): consumed
+    // by the MANIFEST_PARSED handler when a stream starts.
+    fetch('/api/health').then(r => r.json()).then(s => {
+        window.__goflixMaxStreamHeight = Number(s.maxStreamHeight) || 0;
+    }).catch(() => { window.__goflixMaxStreamHeight = 0; });
+    // Account menu: signed-in users see their username and can sign out;
+    // anonymous visitors (the site is open-access) get a "Sign in" entry.
+    let goflixAuthed = false;
     profileMenuAccount?.addEventListener('click', () => {
         closeProfileMenu();
-        showToast('Account settings aren\u2019t available in this demo');
+        if (!goflixAuthed) { location.href = '/login'; return; }
+        location.href = '/account';
     });
-    profileMenuSignout?.addEventListener('click', () => {
+    profileMenuSignout?.addEventListener('click', async () => {
         closeProfileMenu();
-        showToast('Sign out isn\u2019t available in this demo');
+        try { await fetch('/api/auth/logout', { method: 'POST' }); } catch (_) {}
+        // Wipe the account's local data on this device: everything is
+        // already on the server, and the next visitor here (possibly on a
+        // shared computer) must not inherit it. Next sign-in re-pulls.
+        clearLocalUserData();
+        location.href = '/';
     });
+    fetch('/api/auth/status').then(r => r.json()).then(s => {
+        goflixAuthed = !!s.authed;
+        window.__goflixUser = s.user || '';
+        // Signed-in users see their own profile picture in the navbar;
+        // admins additionally get the Dashboard entry.
+        if (goflixAuthed && s.hasAvatar) {
+            const avatarImg = document.getElementById('profile-avatar-img');
+            if (avatarImg) avatarImg.src = '/api/auth/avatar?v=' + Date.now();
+        }
+        if (goflixAuthed && s.isAdmin && profileMenuDashboard) {
+            profileMenuDashboard.classList.remove('hidden');
+        }
+        if (!profileMenuAccount) return;
+        const label = Array.from(profileMenuAccount.childNodes)
+            .find(n => n.nodeType === Node.TEXT_NODE && n.textContent.trim());
+        if (goflixAuthed && s.user) {
+            if (label) label.textContent = ' ' + s.user;
+        } else {
+            // Anonymous: replace "Account" with "Sign in" and hide the
+            // meaningless sign-out entry (and its divider).
+            if (label) label.textContent = ' Sign in';
+            if (profileMenuSignout) {
+                profileMenuSignout.style.display = 'none';
+                const divider = profileMenuSignout.previousElementSibling;
+                if (divider && divider.classList.contains('profile-menu-divider')) {
+                    divider.style.display = 'none';
+                }
+            }
+        }
+    }).catch(() => {});
     // The hamburger dropdown has no backdrop of its own, so dismiss it on
     // any tap outside it (and on Escape), like the other menus here.
     function closeMobileNav() {
@@ -490,6 +546,15 @@ document.addEventListener('DOMContentLoaded', () => {
     // carousel and Genres picker rows (home only), and the category-grouped
     // rows. Called on every fetch and again, with just a filtered slice,
     // whenever the genre chip selection changes.
+    // Cross-device sync landed new userdata (first successful server merge):
+    // re-render the current catalog rows so Continue Watching / My List
+    // reflect entries merged from other devices.
+    window.addEventListener('goflix:userdata-synced', () => {
+        if (currentPage === 'home' && Array.isArray(allCatalogMovies) && allCatalogMovies.length) {
+            renderCategoryRows('home', applyGenreFilter(allCatalogMovies));
+        }
+    });
+
     function renderCategoryRows(page, movies) {
         carouselsContainer.innerHTML = '';
         gridFeed = null; // any in-flight discover fetch now appends nowhere
@@ -506,7 +571,9 @@ document.addEventListener('DOMContentLoaded', () => {
         // Home row order: Continue Watching, Only on …, Genres, then the
         // category rows from /api/home (whose payload order matches).
         if (page === 'home') {
-            const cw = getContinueWatching();
+            // Finished titles (≥92% watched) drop out of Continue Watching —
+            // they live in the watch history (progress) instead.
+            const cw = getContinueWatching().filter(m => !isWatched(m));
             if (cw && cw.length > 0) {
                 renderRow('Continue Watching', cw, true);
             }
@@ -2671,6 +2738,8 @@ document.addEventListener('DOMContentLoaded', () => {
             vixHlsInstance.audioTrack = index;
             playerAudioInitialized = true;
             syncPlayerAudioMenu(index);
+            const at = playerAudioTracks[index];
+            saveAVPrefs({ audio: String(at.lang || at.name || '').toLowerCase() });
         } else if (type === 'external-subtitle') {
             // Activate a External <track> element and disable all others.
             playerSubtitlesForcedOff = false;
@@ -2678,6 +2747,8 @@ document.addEventListener('DOMContentLoaded', () => {
             activateExternalTrack(index);
             enforceSubtitlePriority();
             updatePlayerTrackMenus();
+            const sub = externalSubtitleTracks[index];
+            saveAVPrefs({ sub: String((sub && (sub.language || sub.label)) || '').toLowerCase() || 'off' });
         } else if (type === 'subtitle' && (vixHlsInstance || playbackEngine === 'native')) {
             // Deactivate any External tracks, then enable the HLS/native one.
             deactivateAllExternalTracks();
@@ -2698,6 +2769,8 @@ document.addEventListener('DOMContentLoaded', () => {
             // DEFAULT/FORCED embedded track on the next level switch (and so
             // enforceSubtitlePriority keeps native ones stripped too).
             playerSubtitlesForcedOff = index < 0;
+            const st = playerSubtitleTracks[index];
+            saveAVPrefs({ sub: index >= 0 ? String((st && (st.lang || st.name || st.label)) || '').toLowerCase() : 'off' });
             enforceSubtitlePriority();
             // updatePlayerTrackMenus() re-renders the menu and syncs the
             // current-track label to the newly selected track (or "Off").
@@ -3008,12 +3081,32 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    // Remembered audio/subtitle language: applied once per launch, only
+    // when the user hasn't picked anything on this load yet.
+    function savedAudioTrackIndex(tracks) {
+        const saved = String(getAVPrefs().audio || '').toLowerCase();
+        if (!saved || !Array.isArray(tracks)) return -1;
+        return tracks.findIndex(t => String(t.lang || t.name || '').toLowerCase() === saved);
+    }
+    function savedSubOverride(tracks) {
+        // Returns -2 = no pref, -1 = "off", otherwise the matching index.
+        const saved = String(getAVPrefs().sub || '').toLowerCase();
+        if (!saved) return -2;
+        if (saved === 'off') return -1;
+        if (!Array.isArray(tracks)) return -2;
+        const i = tracks.findIndex(t => String(t.lang || t.name || t.label || '').toLowerCase() === saved);
+        return i >= 0 ? i : -2;
+    }
+
     function applyPlayerTracks(provider) {
         if (!vixHlsInstance) return;
         playerAudioTracks = vixHlsInstance.audioTracks || [];
         playerSubtitleTracks = vixHlsInstance.subtitleTracks || [];
         if (playerAudioTracks.length > 0 && !playerAudioInitialized) {
-            vixHlsInstance.audioTrack = chooseDefaultAudioIndex(playerAudioTracks);
+            let idx = chooseDefaultAudioIndex(playerAudioTracks);
+            const saved = savedAudioTrackIndex(playerAudioTracks);
+            if (saved >= 0) idx = saved;
+            vixHlsInstance.audioTrack = idx;
             playerAudioInitialized = true;
         }
         applyEmbeddedSubtitlePolicy();
@@ -3026,7 +3119,12 @@ document.addEventListener('DOMContentLoaded', () => {
         // Remove any previously injected External tracks.
         vixPlayer.querySelectorAll('track[data-external]').forEach(t => t.remove());
 
-        const defaultIdx = chooseDefaultExternalSubtitleIndex(externalSubtitleTracks);
+        const defaultIdxRaw = chooseDefaultExternalSubtitleIndex(externalSubtitleTracks);
+        // Remembered subtitle preference: "off" keeps everything off; a
+        // language match overrides the launch default pick.
+        const savedSubIdx = savedSubOverride(externalSubtitleTracks);
+        const defaultIdx = savedSubIdx === -1 ? -1 : (savedSubIdx >= 0 ? savedSubIdx : defaultIdxRaw);
+        if (savedSubIdx === -1) playerSubtitlesForcedOff = true;
 
         // Turn off EVERY native text track — including ones hls.js auto-enabled
         // from DEFAULT/FORCED flags in the manifest — BEFORE appending the
@@ -3201,6 +3299,7 @@ document.addEventListener('DOMContentLoaded', () => {
             // 'playing' settles unconditionally — real playback is the strongest
             // readiness signal, even if videoWidth isn't reported yet.
             const onPlaying = () => {
+                playerFreshResolveRetried = false;
                 if (!settled && requestId === playerRequestId) settleOk();
             };
 
@@ -3310,14 +3409,33 @@ document.addEventListener('DOMContentLoaded', () => {
                                 highestLevelIndex = i;
                             }
                         }
-                        // Start on the top tier but LEAVE hls.js in automatic
-                        // ABR mode. Pinning currentLevel/nextLevel/loadLevel
-                        // switches hls.js to manual level control — a connection
-                        // that can't sustain the top bitrate then has nowhere
-                        // down to go and buffers endlessly. With auto left on,
-                        // playback starts at max quality and steps down only
-                        // when measured throughput genuinely can't keep up.
-                        vixHlsInstance.startLevel = highestLevelIndex;
+                    // Start on the top tier but LEAVE hls.js in automatic
+                    // ABR mode. Pinning currentLevel/nextLevel/loadLevel
+                    // switches hls.js to manual level control — a connection
+                    // that can't sustain the top bitrate then has nowhere
+                    // down to go and buffers endlessly. With auto left on,
+                    // playback starts at max quality and steps down only
+                    // when measured throughput genuinely can't keep up.
+                    let capIndex = highestLevelIndex;
+                    if (window.__goflixMaxStreamHeight > 0) {
+                        // Server-side quality cap (MAX_STREAM_HEIGHT): the
+                        // highest rendition at or under the cap becomes the
+                        // ABR ceiling. autoLevelCapping keeps ABR automatic
+                        // below it — this is a capacity lever, not manual
+                        // level control.
+                        capIndex = 0;
+                        for (let i = 0; i < data.levels.length; i++) {
+                            const h = data.levels[i].height || 0;
+                            if (h > 0 && h <= window.__goflixMaxStreamHeight && i > capIndex) {
+                                capIndex = i;
+                            }
+                        }
+                        if (data.levels[capIndex].height > 0 && data.levels[capIndex].height > window.__goflixMaxStreamHeight) {
+                            capIndex = 0; // every tier exceeds the cap; fall back to the lowest
+                        }
+                        vixHlsInstance.autoLevelCapping = capIndex;
+                    }
+                    vixHlsInstance.startLevel = Math.min(highestLevelIndex, capIndex);
                     }
                     applyPlayerTracks(provider);
                     // Start playback as soon as the manifest is parsed — don't
@@ -3380,10 +3498,15 @@ document.addEventListener('DOMContentLoaded', () => {
                             vixHlsInstance.swapAudioCodec();
                             vixHlsInstance.recoverMediaError();
                         } else {
-                            // Last resort: tear down and reload the source fresh.
+                            // Last resort: tear down and reload the source
+                            // fresh. startLoad(resumeAt) re-fetches the master
+                            // through the same token — picking up a hot-swapped
+                            // upstream source — and resumes where playback
+                            // died instead of restarting from zero.
+                            const resumeAt = Number.isFinite(vixPlayer.currentTime) ? vixPlayer.currentTime : -1;
                             vixHlsInstance.stopLoad();
                             vixHlsInstance.loadSource(url);
-                            vixHlsInstance.startLoad();
+                            vixHlsInstance.startLoad(resumeAt);
                         }
                         tryStartPlayback();
                         return;
@@ -3399,6 +3522,28 @@ document.addEventListener('DOMContentLoaded', () => {
                         const dead = vixHlsInstance;
                         vixHlsInstance = null;
                         try { dead.destroy(); } catch (_) {}
+                        // One silent fresh-resolve retry before surfacing an
+                        // error: the recovery ladder just exhausted, which is
+                        // often a stale upstream link. Drop the remembered
+                        // resolution server-side and relaunch — the user sees
+                        // the loader, not an error card. A second consecutive
+                        // failure surfaces the error UI.
+                        if (!playerFreshResolveRetried) {
+                            playerFreshResolveRetried = true;
+                            // Carry the exact playback position across the
+                            // relaunch so the heal is invisible beyond the
+                            // loader — the 5s progress-save cadence alone
+                            // would lose the last few seconds.
+                            if (vixPlayer && Number.isFinite(vixPlayer.currentTime) && vixPlayer.currentTime > 0) {
+                                saveProgress(currentPlayerMovie, currentPlayerSeason, currentPlayerEpisode, vixPlayer.currentTime, vixPlayer.duration);
+                                pendingResumePosition = vixPlayer.currentTime;
+                                vixPlayer.__resumeApplied = false;
+                            }
+                            const tok = String(url).match(/\/api\/media\/proxy\/([^/.]+)/);
+                            if (tok) fetch(`/api/media/invalidate/${tok[1]}`, { method: 'POST' }).catch(() => {});
+                            launchPlayer(currentPlayerMovie, currentPlayerSeason, currentPlayerEpisode);
+                            return;
+                        }
                         showPlayerError(detail);
                     } else {
                         settleErr(new Error(detail));
@@ -3471,6 +3616,11 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     playerNextEp.addEventListener('click', () => {
+        playNextEpisode();
+    });
+
+    playerNextOverlay?.addEventListener('click', () => {
+        playerNextOverlay.hidden = true;
         playNextEpisode();
     });
 
@@ -3834,12 +3984,23 @@ document.addEventListener('DOMContentLoaded', () => {
         controlsHideTimer = setTimeout(hideControlsIdle, 3000);
     }
 
+    // Track pickers (subtitle/audio/server/season) pin the bars open: the
+    // user may be reading or wheel-scrolling the menu without moving the
+    // pointer — neither fires mousemove — and auto-hide used to pull the
+    // bars (and the open menu with them) out from under that interaction.
+    function anyPickerOpen() {
+        return [playerServerPicker, playerAudioPicker, playerSubtitlePicker, playerSeasonPicker]
+            .some(p => p && p.classList.contains('open'));
+    }
+
     // Auto-hides both bars after the idle delay — but only once playback is
-    // actually running. While the loader covers the video (resolving source,
-    // buffering mid-stream, or an error card), the hide keeps postponing so
-    // Back / server switching stay reachable without moving the mouse.
+    // actually running and no picker menu is open. While the loader covers
+    // the video (resolving source, buffering mid-stream, or an error card),
+    // or the user is browsing an open menu, the hide keeps postponing so
+    // Back / server switching / subtitle scrolling stay reachable without
+    // moving the mouse.
     function hideControlsIdle() {
-        if (!playerLoader || playerLoader.style.display !== 'none') {
+        if (!playerLoader || playerLoader.style.display !== 'none' || anyPickerOpen()) {
             controlsHideTimer = setTimeout(hideControlsIdle, 3000);
             return;
         }
@@ -3894,15 +4055,22 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     vixPlayer.addEventListener('timeupdate', enforceSubtitlePriority);
     // Buffering indicator: show the spinner (over a transparent backdrop so the
-    // video stays visible) while the stream stalls.
+    // video stays visible) while the stream stalls. A short grace period keeps
+    // micro-stalls (a sub-300ms seek gap or a single fast fragment fetch) from
+    // flashing the full buffering UI; the timer is cleared the moment playback
+    // resumes. Scrubbing never shows it — the user is already in control.
+    let bufferingSpinnerTimer = null;
     vixPlayer.addEventListener('waiting', () => {
-        if (playerReady && playerModal.classList.contains('show')) {
+        if (!playerReady || !playerModal.classList.contains('show') || scrubbing) return;
+        clearTimeout(bufferingSpinnerTimer);
+        bufferingSpinnerTimer = setTimeout(() => {
             playerLoader.innerHTML = '<div class="player-spinner"></div>';
             playerLoader.style.display = 'flex';
             playerLoader.classList.add('buffering');
-        }
+        }, 250);
     });
     vixPlayer.addEventListener('playing', () => {
+        clearTimeout(bufferingSpinnerTimer);
         if (playerModal.classList.contains('show')) {
             playerLoader.style.display = 'none';
             playerLoader.classList.remove('buffering');
@@ -3920,6 +4088,13 @@ document.addEventListener('DOMContentLoaded', () => {
             saveProgress(currentPlayerMovie, currentPlayerSeason, currentPlayerEpisode, vixPlayer.currentTime, vixPlayer.duration);
             lastSavedPlaybackSecond = vixPlayer.currentTime;
         }
+        // Netflix-style next-episode overlay: last 60 seconds of a TV episode.
+        if (playerNextOverlay) {
+            const remaining = duration - vixPlayer.currentTime;
+            const show = currentPlayerMovie?.type === 'tv' && duration > 0 && remaining > 0 && remaining <= 60;
+            playerNextOverlay.hidden = !show;
+            if (show) showControls();
+        }
     });
     // Buffered-range indicator: show how much of the stream is already
     // downloaded ahead of the playhead as a lighter band on the seek bar.
@@ -3928,7 +4103,17 @@ document.addEventListener('DOMContentLoaded', () => {
         try {
             const duration = Number.isFinite(vixPlayer.duration) ? vixPlayer.duration : 0;
             if (!duration || !vixPlayer.buffered || vixPlayer.buffered.length === 0) return;
-            const end = vixPlayer.buffered.end(vixPlayer.buffered.length - 1);
+            // Headroom that matters is the range containing the playhead: MSE
+            // can hold disjoint ranges (back-buffer eviction, level switches),
+            // and using the last range's end made the band show a contiguity
+            // the playhead can't actually seek through without rebuffering.
+            let end = 0;
+            for (let i = 0; i < vixPlayer.buffered.length; i++) {
+                if (vixPlayer.currentTime >= vixPlayer.buffered.start(i) && vixPlayer.currentTime < vixPlayer.buffered.end(i)) {
+                    end = vixPlayer.buffered.end(i);
+                    break;
+                }
+            }
             playerProgress.style.setProperty('--buffered', `${Math.min(100, (end / duration) * 100)}%`);
         } catch (_) {}
     });
@@ -4009,6 +4194,7 @@ document.addEventListener('DOMContentLoaded', () => {
         let singleTapTimer = null;
         let accumSeconds = 0;
         let accumResetTimer = null;
+        let lastSeekAt = 0;
 
         function doSeek() {
             if (!isHlsServer(activePlayerServer) || !playerReady) return;
@@ -4017,6 +4203,7 @@ document.addEventListener('DOMContentLoaded', () => {
             } else if (Number.isFinite(vixPlayer.duration)) {
                 vixPlayer.currentTime = Math.min(vixPlayer.duration, vixPlayer.currentTime + 10);
             }
+            lastSeekAt = performance.now();
             accumSeconds += 10;
             amountEl.textContent = `${accumSeconds} second${accumSeconds === 1 ? '' : 's'}`;
             indicatorEl.classList.remove('pulse');
@@ -4032,16 +4219,26 @@ document.addEventListener('DOMContentLoaded', () => {
 
         zoneEl.addEventListener('click', () => {
             if (!isHlsServer(activePlayerServer) || !playerReady) return;
+            // A tap arriving shortly after a seek belongs to that seek chain
+            // (rapid double-tapping to skip repeatedly), never to play/pause:
+            // resetting tapCount on each seek used to arm the single-tap
+            // toggle for the next odd tap, spuriously pausing playback
+            // mid-sequence. The chain stays open for ACCUM_RESET_DELAY after
+            // the last seek — the same window as the ripple accumulator —
+            // and a solo trailing tap resolves into another seek step, so
+            // pause can only come from a tap after the chain has settled.
+            const inSeekChain = performance.now() - lastSeekAt < ACCUM_RESET_DELAY;
             tapCount++;
-            if (tapCount === 1) {
-                singleTapTimer = setTimeout(() => {
-                    tapCount = 0;
-                    toggleVixPlay();
-                }, SINGLE_TAP_DELAY);
-            } else {
+            if (tapCount === 2) {
                 clearTimeout(singleTapTimer);
                 tapCount = 0;
                 doSeek();
+            } else {
+                clearTimeout(singleTapTimer);
+                singleTapTimer = setTimeout(() => {
+                    tapCount = 0;
+                    if (inSeekChain) doSeek(); else toggleVixPlay();
+                }, SINGLE_TAP_DELAY);
             }
         });
     }

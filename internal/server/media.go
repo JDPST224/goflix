@@ -105,6 +105,22 @@ func (d *Deps) mediaProxyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// mediaInvalidateHandler drops the remembered resolution behind a live proxy
+// session so the next source request re-runs the full resolve chain. Called
+// by the player after fatal playback errors tied to a stale upstream link.
+func (d *Deps) mediaInvalidateHandler(w http.ResponseWriter, r *http.Request) {
+	if !corsGate(w, r, "POST", false) {
+		return
+	}
+	token := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/media/invalidate/"), "/")
+	if token == "" {
+		writeError(w, http.StatusBadRequest, "Invalid proxy token")
+		return
+	}
+	d.Resolver.InvalidateResolution(token)
+	writeJSON(w, http.StatusOK, map[string]any{"success": true})
+}
+
 // embedMovieDirectHandler directly resolves https://cinesrc.st/embed/movie/{tmdb_id}
 // when accessed via http://<host>/embed/movie/{id}.
 // If requested with Accept: application/json or ?json=1, it returns the JSON payload;

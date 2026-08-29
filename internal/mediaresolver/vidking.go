@@ -101,11 +101,12 @@ func (r *Resolver) tryVidkingDirect(parent context.Context, req MediaRequest) (s
 		log.Printf("[MediaResolver] vidking direct resolve unavailable (%v); falling back to browser scrape", err)
 		return "", false
 	}
-	token, err := r.newSession(vr.Source, vr.Headers, vr.Allowed)
+	token, err := r.newSession(resolutionKey(req), vr.Source, vr.Headers, vr.Allowed)
 	if err != nil {
 		log.Printf("[MediaResolver] vidking direct session failed (%v); falling back to browser scrape", err)
 		return "", false
 	}
+	r.rememberResolution(req, newResolutionRecord(vr))
 	if vr.MasterText != "" {
 		// Admit the validated playlist under its canonical URL with a long
 		// TTL: these CDN playlists are VOD manifests whose segment URLs outlive

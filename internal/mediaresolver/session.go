@@ -28,7 +28,10 @@ var copyBufPool = &sync.Pool{
 }
 
 type proxySession struct {
-	source    string
+	source string
+	// reqKey is the resolution-cache key of the request that created this
+	// session, so InvalidateResolution can drop the right record.
+	reqKey    string
 	headers   http.Header
 	allowed   map[string]bool
 	expiresAt time.Time
@@ -59,7 +62,7 @@ type inflightFetch struct {
 	err   error
 }
 
-func (r *Resolver) newSession(source string, headers http.Header, allowed map[string]bool) (string, error) {
+func (r *Resolver) newSession(reqKey, source string, headers http.Header, allowed map[string]bool) (string, error) {
 	b := make([]byte, 24)
 	if _, err := rand.Read(b); err != nil {
 		return "", err
@@ -94,6 +97,7 @@ func (r *Resolver) newSession(source string, headers http.Header, allowed map[st
 	}
 	r.sessions[token] = &proxySession{
 		source:    source,
+		reqKey:    reqKey,
 		headers:   cloneHeader(headers),
 		allowed:   allowed,
 		expiresAt: now.Add(r.sessionTTL()),

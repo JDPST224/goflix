@@ -114,11 +114,12 @@ func (r *Resolver) tryVidsrcmeDirect(parent context.Context, req MediaRequest) (
 		log.Printf("[MediaResolver] vidsrcme direct resolve unavailable (%v); falling back to browser scrape", err)
 		return "", false
 	}
-	token, err := r.newSession(vr.Source, vr.Headers, vr.Allowed)
+	token, err := r.newSession(resolutionKey(req), vr.Source, vr.Headers, vr.Allowed)
 	if err != nil {
 		log.Printf("[MediaResolver] vidsrcme direct session failed (%v); falling back to browser scrape", err)
 		return "", false
 	}
+	r.rememberResolution(req, newResolutionRecord(vr))
 	if vr.MasterText != "" {
 		r.cache.put(&cacheEntry{
 			key:         vr.Source,

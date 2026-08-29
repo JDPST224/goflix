@@ -5,8 +5,10 @@ package catalog
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
+	"os"
 	"sort"
 	"sync"
 	"time"
@@ -22,6 +24,8 @@ type tmdbTask struct {
 // Store holds the movies / TV shows / popular caches behind per-cache locks.
 type Store struct {
 	client *Client
+	// snapshotPath persists the caches across restarts; "-" disables.
+	snapshotPath string
 
 	moviesMu   sync.RWMutex
 	tvMu       sync.RWMutex
@@ -38,7 +42,10 @@ type Store struct {
 	providersRef sync.Mutex // guards concurrent refreshes (TryLock)
 }
 
-func NewStore(c *Client) *Store { return &Store{client: c} }
+func NewStore(c *Client) *Store { return &Store{client: c, snapshotPath: "catalog_snapshot.json"} }
+
+// SetSnapshotPath points the disk snapshot at path; "-" disables it.
+func (s *Store) SetSnapshotPath(path string) { s.snapshotPath = path }
 
 // Movies returns the cached movie list (nil when never populated).
 func (s *Store) Movies() []Movie {
@@ -81,6 +88,93 @@ func (s *Store) Counts() (movies, tvShows, popular int) {
 	popular = len(s.popular)
 	s.popularMu.RUnlock()
 	return
+}
+
+// catalogSnapshot is the disk form of the three caches.
+type catalogSnapshot struct {
+	Version  int                   `json:"version"`
+	SavedAt  time.Time             `json:"saved_at"`
+	Movies   []Movie               `json:"movies"`
+	TVShows  []Movie               `json:"tvshows"`
+	Popular  []Movie               `json:"popular"`
+	Providers map[string][]Movie   `json:"providers"`
+}
+
+// persistSnapshot writes the caches to disk atomically. Called after each
+// successful refresh so a restart serves the last good catalog immediately,
+// even when TMDB is unreachable.
+func (s *Store) persistSnapshot() {
+	if s.snapshotPath == "" || s.snapshotPath == "-" {
+		return
+	}
+	snap := catalogSnapshot{
+		Version: 1,
+		SavedAt: time.Now(),
+		Movies:  s.Movies(),
+		TVShows: s.TVShows(),
+		Popular: s.Popular(),
+		Providers: s.Providers(),
+	}
+	if len(snap.Movies) == 0 && len(snap.TVShows) == 0 && len(snap.Popular) == 0 {
+		return // nothing worth persisting yet
+	}
+	data, err := json.MarshalIndent(&snap, "", "  ")
+	if err != nil {
+		log.Printf("[Catalog] snapshot marshal failed: %v", err)
+		return
+	}
+	tmp := s.snapshotPath + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		log.Printf("[Catalog] snapshot write failed: %v", err)
+		return
+	}
+	if err := os.Rename(tmp, s.snapshotPath); err != nil {
+		os.Remove(tmp)
+		log.Printf("[Catalog] snapshot rename failed: %v", err)
+	}
+}
+
+// LoadSnapshot restores the last persisted catalog into the caches so the
+// API serves real data from the first request after a restart. The normal
+// refresh cycle replaces it once TMDB answers.
+func (s *Store) LoadSnapshot() {
+	if s.snapshotPath == "" || s.snapshotPath == "-" {
+		return
+	}
+	data, err := os.ReadFile(s.snapshotPath)
+	if err != nil {
+		return // first run or disabled
+	}
+	var snap catalogSnapshot
+	if err := json.Unmarshal(data, &snap); err != nil || snap.Version != 1 {
+		log.Printf("[Catalog] discarding unreadable catalog snapshot %s", s.snapshotPath)
+		return
+	}
+	if len(snap.Movies) == 0 && len(snap.TVShows) == 0 && len(snap.Popular) == 0 {
+		return
+	}
+	s.moviesMu.Lock()
+	if len(s.movies) == 0 {
+		s.movies = snap.Movies
+	}
+	s.moviesMu.Unlock()
+	s.tvMu.Lock()
+	if len(s.tvShows) == 0 {
+		s.tvShows = snap.TVShows
+	}
+	s.tvMu.Unlock()
+	s.popularMu.Lock()
+	if len(s.popular) == 0 {
+		s.popular = snap.Popular
+	}
+	s.popularMu.Unlock()
+	s.providersMu.Lock()
+	if len(s.providers) == 0 {
+		s.providers = snap.Providers
+	}
+	s.providersMu.Unlock()
+	log.Printf("[Catalog] restored catalog snapshot from %s (saved %s, movies=%d tv=%d popular=%d)",
+		s.snapshotPath, snap.SavedAt.Format(time.RFC3339), len(snap.Movies), len(snap.TVShows), len(snap.Popular))
 }
 
 func (s *Store) runTasks(tasks []tmdbTask) []Movie {
@@ -138,6 +232,7 @@ func (s *Store) RefreshMovies() {
 		log.Println("Warning: movie fetch returned 0 movies, keeping old cache")
 	}
 	s.moviesMu.Unlock()
+	s.persistSnapshot()
 }
 
 // RefreshTVShows repopulates the TV shows cache; overlapping calls skip.
@@ -175,6 +270,7 @@ func (s *Store) RefreshTVShows() {
 		log.Println("Warning: TV fetch returned 0 shows, keeping old cache")
 	}
 	s.tvMu.Unlock()
+	s.persistSnapshot()
 }
 
 // RefreshPopular repopulates the popular/new cache; overlapping calls skip.
@@ -201,6 +297,7 @@ func (s *Store) RefreshPopular() {
 		log.Println("Warning: popular fetch returned 0 items, keeping old cache")
 	}
 	s.popularMu.Unlock()
+	s.persistSnapshot()
 }
 
 // providerTable maps our carousel keys to TMDB watch-provider IDs (US
@@ -282,6 +379,7 @@ func (s *Store) RefreshProviders() {
 		log.Println("Warning: providers fetch returned 0 providers, keeping old cache")
 	}
 	s.providersMu.Unlock()
+	s.persistSnapshot()
 }
 
 // homeRowOrder is the exact row interleave of /api/home: for each entry the

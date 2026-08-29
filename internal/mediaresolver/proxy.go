@@ -19,10 +19,7 @@ import (
 // Proxy serves HLS manifests and media resources through the server. It rewrites
 // manifest URIs so the browser never contacts the provider/CDN directly.
 func (r *Resolver) Proxy(w http.ResponseWriter, req *http.Request, token string) error {
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "*")
-	w.Header().Set("Access-Control-Expose-Headers", "Content-Length, Content-Range, Accept-Ranges")
+	// No CORS headers: the player and the proxy are same-origin by design.
 
 	if req.Method == http.MethodOptions {
 		w.WriteHeader(http.StatusNoContent)

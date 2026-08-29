@@ -335,6 +335,9 @@ body {
 
 .profile-menu button svg { flex-shrink: 0; color: var(--text-secondary); }
 
+/* Hidden menu entries (e.g. Dashboard for non-admins) stay out of layout. */
+.profile-menu button.hidden { display: none; }
+
 .profile-menu-divider {
     height: 1px;
     margin: 6px 4px;
@@ -2458,6 +2461,30 @@ button[aria-selected="true"] .server-option-check,
 
 .player-ep-item-meta { font-size: 0.72rem; color: rgba(255,255,255,0.5); }
 .player-ep-loading { display: flex; justify-content: center; padding: 40px; }
+
+/* ── Next-episode overlay (final minute) ───────────────────── */
+
+.player-next-overlay {
+    position: absolute;
+    right: 4%;
+    bottom: 14%;
+    z-index: 30;
+    display: flex;
+    align-items: center;
+    padding: 12px 22px;
+    border: 1px solid rgba(255, 255, 255, 0.35);
+    border-radius: 6px;
+    background: rgba(10, 10, 16, 0.78);
+    color: #fff;
+    font-family: inherit;
+    font-size: 1rem;
+    font-weight: 700;
+    cursor: pointer;
+    transition: background 0.2s ease, transform 0.2s ease;
+}
+.player-next-overlay:hover { background: rgba(229, 9, 20, 0.85); transform: translateY(-2px); }
+.player-next-overlay[hidden] { display: none; }
+.player-next-overlay-label { display: flex; align-items: center; gap: 8px; }
 
 /* ── Loading / error ────────────────────────────────────────── */
 

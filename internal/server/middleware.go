@@ -11,10 +11,11 @@ import (
 	"sync"
 )
 
-// writeJSON emits a JSON body with the media-style content type and CORS star.
+// writeJSON emits a JSON body with the media-style content type. No CORS
+// headers: the app is same-origin by design, and an open CORS policy on an
+// open-access server is pure attack surface.
 func writeJSON(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.WriteHeader(status)
 	if err := json.NewEncoder(w).Encode(value); err != nil {
 		log.Printf("[Server] json encode error: %v", err)
@@ -27,16 +28,13 @@ func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, map[string]any{"success": false, "error": message})
 }
 
-// jsonGate applies the catalog-handler preamble: standard JSON/CORS response
+// jsonGate applies the catalog-handler preamble: standard JSON response
 // headers and method validation. It writes the response itself for OPTIONS
 // preflights (204) and unsupported methods (405 envelope + Allow), returning
 // false so the caller stops. Cache-Control is intentionally NOT set here —
 // each handler owns its own caching policy.
 func jsonGate(w http.ResponseWriter, r *http.Request) bool {
 	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "*")
 	switch r.Method {
 	case http.MethodOptions:
 		w.WriteHeader(http.StatusNoContent)
@@ -51,19 +49,9 @@ func jsonGate(w http.ResponseWriter, r *http.Request) bool {
 }
 
 // corsGate implements the lighter preamble shared by media-source, proxy and
-// subtitle handlers. allowMethods is the literal Allow-header value (and the
-// accepted set); exposeHeaders adds Access-Control-Expose-Headers (the proxy
-// needs Content-Length/Range visible to the player).
+// subtitle handlers: method validation only. Cross-origin clients are not
+// supported — the app and its media are same-origin.
 func corsGate(w http.ResponseWriter, r *http.Request, allowMethods string, exposeHeaders bool) bool {
-	h := w.Header()
-	h.Set("Access-Control-Allow-Origin", "*")
-	// Use the caller-supplied allowMethods in the CORS header so browser
-	// preflights for POST (subtitle registration) are not rejected.
-	h.Set("Access-Control-Allow-Methods", allowMethods+", OPTIONS")
-	h.Set("Access-Control-Allow-Headers", "*")
-	if exposeHeaders {
-		h.Set("Access-Control-Expose-Headers", "Content-Length, Content-Range, Accept-Ranges")
-	}
 	if r.Method == http.MethodOptions {
 		w.WriteHeader(http.StatusNoContent)
 		return false
@@ -119,6 +107,13 @@ func (g *gzipResponseWriter) Flush() {
 	if flusher, ok := g.ResponseWriter.(http.Flusher); ok {
 		flusher.Flush()
 	}
+}
+
+// Unwrap keeps http.NewResponseController working through the gzip wrapper,
+// mirroring loggingResponseWriter — anything wrapped inside the chain that
+// touches deadlines or flush controls needs the escape hatch.
+func (g *gzipResponseWriter) Unwrap() http.ResponseWriter {
+	return g.ResponseWriter
 }
 
 // GzipCatalog compresses catalog JSON responses for clients advertising gzip,
