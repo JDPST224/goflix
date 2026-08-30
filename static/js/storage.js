@@ -273,7 +273,7 @@ function mergeItemLists(local, server, atField) {
         if (item && typeof item === 'object') byKey.set(mediaKey(item), item);
     });
     (Array.isArray(server) ? server : []).forEach((item) => {
-        if (!item || typeof item === 'object') return;
+        if (!item || typeof item !== 'object') return;
         const k = mediaKey(item);
         const prev = byKey.get(k);
         if (!prev || (Number(item[atField]) || 0) >= (Number(prev[atField]) || 0)) {
@@ -351,10 +351,12 @@ async function syncNow() {
         if (res.status === 401) {
             // Anonymous visitor: the site works fully, this browser just
             // stays localStorage-only. No redirect, no error.
+            console.warn('[GoFlix] userdata sync: not signed in — data stays on this device only');
             syncState = 'off';
             return;
         }
         if (!res.ok) {
+            console.warn('[GoFlix] userdata sync failed with HTTP', res.status, '— will retry');
             unsyncedWrites = true; // failed: try again on the next queue/flush
             return;
         }
@@ -363,6 +365,10 @@ async function syncNow() {
             const before = userdataFingerprint();
             applyMerged(merged);
             unsyncedWrites = false;
+            console.info('[GoFlix] userdata synced:',
+                (merged.mylist || []).length, 'my list,',
+                Object.keys(merged.progress || {}).length, 'progress,',
+                (merged.cw || []).length, 'continue watching');
             const first = syncState !== 'on';
             if (first || userdataFingerprint() !== before) {
                 syncState = 'on';
@@ -371,7 +377,10 @@ async function syncNow() {
                 window.dispatchEvent(new Event('goflix:userdata-synced'));
             }
         }
-    } catch (_) { /* offline: local state remains authoritative */ }
+    } catch (err) {
+        console.warn('[GoFlix] userdata sync unreachable — local state remains authoritative:', err && err.message);
+        unsyncedWrites = true;
+    }
     finally { syncInFlight = false; }
 }
 
@@ -413,7 +422,10 @@ function flushUnsynced() {
 // a device that has been sitting open must show what other devices played
 // meanwhile, not the state from whenever this tab last loaded.
 function pullSync() {
-    if (syncState !== 'on') return; // initialSync handles the first pull
+    // 'off' = anonymous (server would 401); 'pending' is allowed so a device
+    // whose first sync failed still catches up the moment the server is
+    // reachable again.
+    if (syncState === 'off') return;
     syncNow();
 }
 document.addEventListener('visibilitychange', () => {
@@ -447,9 +459,26 @@ window.addEventListener('online', () => { if (syncState !== 'off') syncNow(); })
     }
     const bound = localUser();
     if (user && bound && user !== bound) {
-        // Different known account on this browser: local data belongs to
-        // the previous account (still safe on the server) â€” start clean.
-        wipeLocalUserData();
+        // Different known account on this browser: local data belongs to the
+        // previous account. Wipe it — but only when the new account actually
+        // has its own data to take over. If the new account is empty (fresh
+        // server deploy, recreated account), wiping here would destroy this
+        // browser's only copy of its data before the sync could adopt it
+        // into the new account — so keep it and let the sync upload it.
+        let theirs = null;
+        try {
+            const res = await fetch('/api/userdata');
+            if (res.ok) theirs = await res.json();
+        } catch (_) {}
+        const theirsEmpty = !theirs ||
+            ((!Array.isArray(theirs.mylist) || theirs.mylist.length === 0) &&
+             (!theirs.progress || Object.keys(theirs.progress).length === 0) &&
+             (!Array.isArray(theirs.cw) || theirs.cw.length === 0));
+        if (theirs && !theirsEmpty) {
+            wipeLocalUserData();
+        } else if (theirsEmpty) {
+            console.info('[GoFlix] account switched, but the new account is empty — adopting this device\'s local data');
+        }
     }
     setLocalUser(user);
     syncNow();
