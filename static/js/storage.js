@@ -84,6 +84,12 @@ export function saveProgress(movie, season, episode, position, duration) {
     const key = mediaKey(movie);
     const previous = prog[key] || {};
     const sameEpisode = previous.season === season && previous.episode === episode;
+    // A save without a playable position (the player merely stamping "user
+    // opened this season/episode") must never clobber a real position —
+    // especially one just synced from another device. For the same episode
+    // nothing changes: keep the entry untouched, including its `at`, so this
+    // stamp cannot outrank another device's newer real-position save.
+    if (!Number.isFinite(position) && sameEpisode) return;
     delete prog[movie.id];
     prog[key] = {
         season,
@@ -200,6 +206,14 @@ function applyTombstones(list, atField) {
 // â”€â”€â”€ Server sync â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 let syncTimer = null;
 let syncState = 'pending'; // pending | on | off
+let lastSyncStart = 0;
+let unsyncedWrites = false;
+// A pure debounce can never fire during continuous playback: the player
+// saves progress every ~5s and would keep resetting the timer, so the
+// position only reached the server after playback stopped â€” or never, if
+// the tab was closed first. Throttle instead: while writes keep coming, a
+// sync runs at least every SYNC_MIN_INTERVAL.
+const SYNC_MIN_INTERVAL = 8000;
 
 // The local data belongs to ONE account (localStorage is per-browser, not
 // per-account). goflix_user records which one; on an account switch the
@@ -231,10 +245,39 @@ function snapshotLocal() {
     };
 }
 
+// Pick the better of two progress entries for the same title: the newest
+// client clock wins, EXCEPT a position-less stamp (no position and no
+// duration — e.g. a player that only recorded "watching S1E2") can never
+// beat a real playback position saved for the same episode, no matter the
+// clock. Without this guard one device merely *opening* an episode would
+// erase the position another device actually watched to.
+function pickProgress(a, b) {
+    if (!a || typeof a !== 'object') return b && typeof b === 'object' ? b : undefined;
+    if (!b || typeof b !== 'object') return a;
+    const aStamp = !Number(a.position) && !Number(a.duration);
+    const bStamp = !Number(b.position) && !Number(b.duration);
+    if (aStamp !== bStamp && a.season === b.season && a.episode === b.episode) {
+        return aStamp ? b : a;
+    }
+    return (Number(b.at) || 0) >= (Number(a.at) || 0) ? b : a;
+}
+
 function applyMerged(m) {
     if (!m || typeof m !== 'object') return;
     if (Array.isArray(m.mylist)) writeJSON('goflix_mylist', m.mylist);
-    if (m.progress && typeof m.progress === 'object') writeJSON('goflix_progress', m.progress);
+    if (m.progress && typeof m.progress === 'object') {
+        // Merge per key instead of overwriting: writes that happened locally
+        // while the request was in flight (and entries from another device
+        // that are newer than what the server echoed back) must survive.
+        const local = readJSON('goflix_progress', {});
+        const keys = new Set([...Object.keys(local), ...Object.keys(m.progress)]);
+        const mergedProgress = {};
+        keys.forEach((k) => {
+            const winner = pickProgress(local[k], m.progress[k]);
+            if (winner) mergedProgress[k] = winner;
+        });
+        writeJSON('goflix_progress', mergedProgress);
+    }
     if (Array.isArray(m.cw)) writeJSON('goflix_cw', m.cw);
     if (m.removed && typeof m.removed === 'object') writeJSON('goflix_removed', m.removed);
     if (m.avprefs && typeof m.avprefs === 'object' &&
@@ -245,6 +288,7 @@ function applyMerged(m) {
 
 async function syncNow() {
     if (syncState === 'off') return;
+    lastSyncStart = Date.now();
     try {
         const res = await fetch('/api/userdata/sync', {
             method: 'POST',
@@ -257,10 +301,14 @@ async function syncNow() {
             syncState = 'off';
             return;
         }
-        if (!res.ok) return;
+        if (!res.ok) {
+            unsyncedWrites = true; // failed: try again on the next queue/flush
+            return;
+        }
         const merged = await res.json();
         if (merged && merged.success !== false) {
             applyMerged(merged);
+            unsyncedWrites = false;
             if (syncState !== 'on') {
                 syncState = 'on';
                 // First successful sync: the Continue Watching row may not
@@ -274,9 +322,43 @@ async function syncNow() {
 
 function queueSync() {
     if (syncState === 'off') return;
+    unsyncedWrites = true;
     clearTimeout(syncTimer);
-    syncTimer = setTimeout(syncNow, 1500);
+    const sinceLast = Date.now() - lastSyncStart;
+    const wait = sinceLast >= SYNC_MIN_INTERVAL ? 1500 : SYNC_MIN_INTERVAL - sinceLast;
+    syncTimer = setTimeout(syncNow, wait);
 }
+
+// Last-chance flush when the tab is being closed or hidden: the debounced
+// timer dies with the page, so without this the final few seconds of
+// playback would never reach the server and other devices would resume at
+// the wrong position. sendBeacon survives page teardown; keepalive fetch is
+// the fallback.
+function flushUnsynced() {
+    if (syncState === 'off' || !unsyncedWrites) return;
+    const body = JSON.stringify(snapshotLocal());
+    unsyncedWrites = false;
+    try {
+        if (navigator.sendBeacon &&
+            navigator.sendBeacon('/api/userdata/sync', new Blob([body], { type: 'application/json' }))) {
+            return;
+        }
+    } catch (_) {}
+    try {
+        fetch('/api/userdata/sync', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body,
+            keepalive: true
+        });
+    } catch (_) {}
+}
+document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') flushUnsynced();
+});
+window.addEventListener('pagehide', flushUnsynced);
+// Catch up after the network comes back (sleep/wake, wifi reconnect).
+window.addEventListener('online', () => { if (syncState !== 'off') syncNow(); });
 
 // Initial sync: signed-in users get cross-device persistence; anonymous
 // visitors browse with localStorage only (their data never leaves this

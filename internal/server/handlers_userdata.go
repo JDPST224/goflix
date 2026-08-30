@@ -234,7 +234,9 @@ func (st *userDataState) merge(in userDataState) userDataState {
 		if v == nil {
 			continue
 		}
-		if old, ok := merged.Progress[k]; !ok || v.At >= old.At {
+		if old, ok := merged.Progress[k]; ok {
+			merged.Progress[k] = betterProgressEntry(old, v)
+		} else {
 			merged.Progress[k] = v
 		}
 	}
@@ -288,6 +290,29 @@ func (st *userDataState) merge(in userDataState) userDataState {
 		merged.AVPrefsAt = st.AVPrefsAt
 	}
 	return merged
+}
+
+// betterProgressEntry picks the winner between the stored entry and an
+// incoming client edit for the same media key. Normally the newer client
+// clock wins — but a position-less stamp (no position and no duration, e.g.
+// a client that only recorded "user opened S1E2") must not erase a real
+// playback position for the same season/episode, whatever the clock says:
+// one device merely opening an episode would otherwise reset the position
+// another device actually watched to. Different season/episode means the
+// user moved on, so the newer entry always wins there.
+func betterProgressEntry(old, new *progressEntry) *progressEntry {
+	oldStamp := old.Position == 0 && old.Duration == 0
+	newStamp := new.Position == 0 && new.Duration == 0
+	if oldStamp != newStamp && old.Season == new.Season && old.Episode == new.Episode {
+		if oldStamp {
+			return new
+		}
+		return old
+	}
+	if new.At >= old.At {
+		return new
+	}
+	return old
 }
 
 // filterTombstoned removes entries whose media key has a removal timestamp

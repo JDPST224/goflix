@@ -3269,7 +3269,15 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (currentPlayerMovie) {
                     addToContinueWatching(currentPlayerMovie);
                     if (currentPlayerMovie.type === 'tv') {
-                        saveProgress(currentPlayerMovie, currentPlayerSeason, currentPlayerEpisode);
+                        // Pass the real position/duration when the video has
+                        // already advanced (e.g. the resume seek ran before
+                        // settle) so the stamp carries playback data; when
+                        // nothing has played yet, storage keeps any existing
+                        // position instead of resetting it to 0.
+                        const t = Number.isFinite(vixPlayer.currentTime) ? vixPlayer.currentTime : 0;
+                        const d = Number.isFinite(vixPlayer.duration) ? vixPlayer.duration : 0;
+                        saveProgress(currentPlayerMovie, currentPlayerSeason, currentPlayerEpisode,
+                            t > 0.5 ? t : undefined, d > 0 ? d : undefined);
                     }
                 }
                 playerLoader.style.display = 'none';
