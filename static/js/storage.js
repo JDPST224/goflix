@@ -262,9 +262,43 @@ function pickProgress(a, b) {
     return (Number(b.at) || 0) >= (Number(a.at) || 0) ? b : a;
 }
 
+// Union two item lists (My List / Continue Watching) by media key, keeping
+// the entry with the newer timestamp when both sides have one. Local-only
+// entries survive — without this, a server response that was in flight
+// while the user added/played something would erase that write locally
+// (and it had not been uploaded yet, so it would be lost everywhere).
+function mergeItemLists(local, server, atField) {
+    const byKey = new Map();
+    (Array.isArray(local) ? local : []).forEach((item) => {
+        if (item && typeof item === 'object') byKey.set(mediaKey(item), item);
+    });
+    (Array.isArray(server) ? server : []).forEach((item) => {
+        if (!item || typeof item === 'object') return;
+        const k = mediaKey(item);
+        const prev = byKey.get(k);
+        if (!prev || (Number(item[atField]) || 0) >= (Number(prev[atField]) || 0)) {
+            byKey.set(k, item);
+        }
+    });
+    return [...byKey.values()];
+}
+
 function applyMerged(m) {
     if (!m || typeof m !== 'object') return;
-    if (Array.isArray(m.mylist)) writeJSON('goflix_mylist', m.mylist);
+    // Tombstones first: they must be in place before the lists below are
+    // merged, or a removal from another device wouldn't filter a locally
+    // stale copy in this very response.
+    if (m.removed && typeof m.removed === 'object') {
+        const local = tombstones();
+        Object.keys(m.removed).forEach((k) => {
+            if ((Number(m.removed[k]) || 0) > (Number(local[k]) || 0)) local[k] = m.removed[k];
+        });
+        writeJSON('goflix_removed', local);
+    }
+    if (Array.isArray(m.mylist)) {
+        writeJSON('goflix_mylist', applyTombstones(
+            mergeItemLists(getMyList(), m.mylist, 'listAt'), 'listAt'));
+    }
     if (m.progress && typeof m.progress === 'object') {
         // Merge per key instead of overwriting: writes that happened locally
         // while the request was in flight (and entries from another device
@@ -278,16 +312,35 @@ function applyMerged(m) {
         });
         writeJSON('goflix_progress', mergedProgress);
     }
-    if (Array.isArray(m.cw)) writeJSON('goflix_cw', m.cw);
-    if (m.removed && typeof m.removed === 'object') writeJSON('goflix_removed', m.removed);
+    if (Array.isArray(m.cw)) {
+        const mergedCw = mergeItemLists(getContinueWatching(), m.cw, 'at')
+            .sort((a, b) => (Number(b.at) || 0) - (Number(a.at) || 0));
+        writeJSON('goflix_cw', applyTombstones(mergedCw, 'at'));
+    }
     if (m.avprefs && typeof m.avprefs === 'object' &&
         (Number(m.avprefs_at) || 0) >= (Number(getAVPrefs().at) || 0)) {
         writeJSON('goflix_avprefs', m.avprefs);
     }
 }
 
+// Cheap "did the merge actually change anything" probe, used to re-render
+// rows only when a sync brought real updates from the server.
+function userdataFingerprint() {
+    return JSON.stringify([
+        readJSON('goflix_mylist', []),
+        readJSON('goflix_progress', {}),
+        readJSON('goflix_cw', []),
+        readJSON('goflix_removed', {}),
+        getAVPrefs()
+    ]);
+}
+
+let syncInFlight = false;
+
 async function syncNow() {
     if (syncState === 'off') return;
+    if (syncInFlight) { queueSync(); return; } // retry after the current one lands
+    syncInFlight = true;
     lastSyncStart = Date.now();
     try {
         const res = await fetch('/api/userdata/sync', {
@@ -307,17 +360,19 @@ async function syncNow() {
         }
         const merged = await res.json();
         if (merged && merged.success !== false) {
+            const before = userdataFingerprint();
             applyMerged(merged);
             unsyncedWrites = false;
-            if (syncState !== 'on') {
+            const first = syncState !== 'on';
+            if (first || userdataFingerprint() !== before) {
                 syncState = 'on';
-                // First successful sync: the Continue Watching row may not
-                // have existed locally before the merge â€” let the app
-                // re-render the home rows with the merged data.
+                // First successful sync, or the merge brought changes from
+                // another device (pull): let the app re-render its rows.
                 window.dispatchEvent(new Event('goflix:userdata-synced'));
             }
         }
     } catch (_) { /* offline: local state remains authoritative */ }
+    finally { syncInFlight = false; }
 }
 
 function queueSync() {
@@ -353,10 +408,22 @@ function flushUnsynced() {
         });
     } catch (_) {}
 }
+// Every sync POST also returns the server's merged state, so syncing is a
+// push AND a pull. Pull when the user comes back to this tab — switching to
+// a device that has been sitting open must show what other devices played
+// meanwhile, not the state from whenever this tab last loaded.
+function pullSync() {
+    if (syncState !== 'on') return; // initialSync handles the first pull
+    syncNow();
+}
 document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden') flushUnsynced();
+    else pullSync();
 });
+window.addEventListener('focus', pullSync);
 window.addEventListener('pagehide', flushUnsynced);
+// Background catch-up for long-lived tabs, only while visible.
+setInterval(pullSync, 60000);
 // Catch up after the network comes back (sleep/wake, wifi reconnect).
 window.addEventListener('online', () => { if (syncState !== 'off') syncNow(); });
 

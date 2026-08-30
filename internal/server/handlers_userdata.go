@@ -1,4 +1,4 @@
-﻿package server
+package server
 
 // Cross-device userdata sync: My List, playback progress and the
 // Continue Watching list live in the browser's localStorage; these endpoints
@@ -31,9 +31,9 @@ type progressEntry struct {
 
 // userDataState is the full synced household state.
 type userDataState struct {
-	MyList   []json.RawMessage        `json:"mylist"`
+	MyList   []json.RawMessage         `json:"mylist"`
 	Progress map[string]*progressEntry `json:"progress"`
-	CW       []json.RawMessage        `json:"cw"`
+	CW       []json.RawMessage         `json:"cw"`
 	// Removed maps mediaKey â†’ removal timestamp (client clock ms): a
 	// tombstone that keeps one device's deletion from being resurrected by
 	// another device's older copy. Entries newer than the tombstone
@@ -111,8 +111,8 @@ func (s *userDataStore) persistLocked() {
 		return
 	}
 	payload := struct {
-		Version int                           `json:"version"`
-		Users   map[string]*userDataState     `json:"users"`
+		Version int                       `json:"version"`
+		Users   map[string]*userDataState `json:"users"`
 	}{Version: 2, Users: s.states}
 	data, err := json.MarshalIndent(&payload, "", "  ")
 	if err != nil {
