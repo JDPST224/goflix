@@ -10,7 +10,7 @@ players alike.
 - **Catalog** — trending and categorized rows for movies and TV, search,
   detail pages with seasons/episodes (TMDB API), poster/backdrop images served
   through a disk-cached `/api/img` proxy so browsing is LAN-fast.
-- **Multi-provider sources** — VixSrc, VidKing, VidLove, CineSrc and VidSrcMe
+- **Multi-provider sources** — VixSrc, VidKing, CineSrc and VidSrcMe
   are resolved directly against their endpoints for fast startup; if that
   fails, a headless-Chrome scrape of the provider page takes over
   automatically.
@@ -34,7 +34,7 @@ players alike.
   optional server-side resolution cap (`MAX_STREAM_HEIGHT`), double-tap
   seek, skip back/forward, next-episode overlay, PiP, and remembered
   audio/subtitle languages across episodes.
-- **Subtitles everywhere** — search across OpenSubtitles/Vidlove with SRT→WebVTT
+- **Subtitles everywhere** — search across OpenSubtitles with SRT→WebVTT
   conversion, and server-side embedding into the HLS master manifest so
   smart-TV native players (which ignore `<track>` elements) get selectable
   subtitle languages too.
@@ -88,7 +88,7 @@ parsed leniently — an invalid value falls back to the default.
 | `AUTH_RATE_PER_MIN` / `RESOLVE_RATE_PER_MIN` | `10` / `10` | Per-IP rate limits (login+register / media resolutions) |
 | `TLS_CERT` / `TLS_KEY` | — | Serve HTTPS when both set; session cookies become `Secure` |
 | `DEBUG_PPROF` | `false` | Mount Go pprof endpoints under `/debug/pprof/` |
-| `VIXSRC_ORIGIN` / `VIDKING_ORIGIN` / `VIDLOVE_ORIGIN` / `VIDSRCME_ORIGIN` / `VIDSRCME_DATA_ORIGIN` / `CINESRC_ORIGIN` | provider URLs | Override media source origins |
+| `VIXSRC_ORIGIN` / `VIDKING_ORIGIN` / `VIDSRCME_ORIGIN` / `VIDSRCME_DATA_ORIGIN` / `CINESRC_ORIGIN` | provider URLs | Override media source origins |
 
 ## Smart-TV playback
 
@@ -109,11 +109,11 @@ internal/config/            config.conf parsing (+ env overrides), defaults
 internal/catalog/           TMDB client, movie/TV mapping, cache stores
 internal/server/            route table, method gates, gzip, auth/accounts, userdata
                             sync, image proxy, rate limiting, security headers
-internal/subtitles/         OpenSubtitles/Vidlove search clients, SRT→WebVTT converter
+internal/subtitles/         OpenSubtitles search client, SRT→WebVTT converter
 internal/mediaresolver/     the media pipeline:
     resolver.go               Resolve() orchestration, sessions, config
     resolution_cache.go       instant-rewatch cache: validate/heal, prewarm, persist
-    cinesrc/vidking/vidlove/vidsrcme/vixsrc.go per-provider direct resolvers
+    cinesrc/vidking/vidsrcme/vixsrc.go per-provider direct resolvers
     browser.go                headless-Chrome fallback scrape
     proxy.go                  the streaming reverse-proxy endpoint
     manifest.go               manifest rewriting + subtitle rendition embedding
@@ -128,27 +128,33 @@ static/login.html + js/     sign-in / registration page
 ## HTTP API
 
 - `GET /api/home|movies|tvshows|popular` — gzipped catalog JSON
+- `GET /api/providers` — "Only on …" carousel map, keyed by provider
+- `GET /api/discover?provider=&type=&genre=&page=` — one paginated page of
+  TMDB discover results for a provider (US region) or genre
 - `GET /api/search?q=&type=` · `/api/detail?type=&id=` · `/api/episodes?id=&season=`
 - `GET /api/img?u=<tmdb-image-url>` — disk-cached image proxy (host-allowlisted)
 - `GET /api/media/source/<provider>/movie/<tmdbId>` and `/tv/<id>/<s>/<e>`
-  (`provider` ∈ cinesrc | vixsrc | vidking | vidlove | vidsrcme); legacy unprefixed routes map
+  (`provider` ∈ cinesrc | vixsrc | vidking | vidsrcme); legacy unprefixed routes map
   to VixSrc
 - `GET /embed/movie/<tmdbId>` and `GET /embed/tv/<id>[?s=<s>&e=<e>]` — direct CineSrc embed resolution (redirects to stream or returns JSON)
 - `GET /api/media/proxy/<token>.m3u8?url=...` — HLS proxy (supports Range)
 - `POST /api/media/invalidate/<token>` — drop the remembered resolution behind a session (stale-link healing)
 - `POST /api/media/subs/<token>` — register extra subtitle renditions on a
   live session; the resolver embeds its own ladder automatically for
-  cinesrc/vidking/vidlove/vidsrcme, this tops it up
-- `GET /api/subtitles/cinesrc|vidking|vidlove|vidsrcme?type=&id=&season=&episode=` — search
+  cinesrc/vidking/vidsrcme, this tops it up
+- `GET /api/subtitles/cinesrc|vidking|vidsrcme?type=&id=&season=&episode=` — search
 - `GET /api/subtitles/cinesrc/download?url=` ·
   `GET /api/subtitles/opensubtitles/download?url=` ·
-  `GET /api/subtitles/vidlove/download?url=` ·
   `GET /api/subtitles/vidsrcme/download?url=` — WebVTT download/convert
 - `GET /api/subtitles/wrap.m3u8?src=...` — single-segment playlist wrapping a
   local subtitle endpoint (rendition target for native players)
 - `GET /api/auth/status` · `POST /api/auth/register|login|logout|password` — accounts
+- `GET /api/auth/avatar` · `POST /api/auth/avatar` — serve (or set/remove)
+  the signed-in user's profile picture
+- `POST /api/auth/delete` — close the signed-in account (password re-checked)
 - `GET /api/userdata` · `POST /api/userdata/sync` — per-account data sync
   (My List, progress, Continue Watching, A/V preferences, removal tombstones)
+- `POST /api/userdata/clear` — wipe the caller's synced state
 - `GET /api/admin/users` · `DELETE /api/admin/users/<id>` ·
   `POST /api/admin/users/<id>/logout` — admin account management
 - `GET /api/health` — uptime, catalog counts, resolution-cache counters,
@@ -252,7 +258,7 @@ You can customize the probe target and test scope using environment variables:
 
 | Variable | Default | Description |
 | :--- | :--- | :--- |
-| `BW_PROVIDERS` | *all* | Comma-separated list of providers to test: `cinesrc`, `vixsrc`, `vidking`, `vidlove`, `vidsrcme` |
+| `BW_PROVIDERS` | *all* | Comma-separated list of providers to test: `cinesrc`, `vixsrc`, `vidking`, `vidsrcme` |
 | `BW_TYPE` | `movie` | Media type: `movie` or `tv` |
 | `BW_ID` | `27205` | TMDB ID (e.g. `550` for *Fight Club*, `1396` for *Breaking Bad*, `27205` for *Inception*) |
 | `BW_SEASON` | `1` | TV show season number (when `BW_TYPE=tv`) |
@@ -291,7 +297,6 @@ At the end of the test, GoFlix prints a tabular performance summary:
 SERVER           TIER       CDN HOST            RESOLVED ms  PING ms  TTFB ms  BANDWIDTH Mbps  SEGS  MB
 vidking/YORU     1080p      moon.peakstorm.top  11160        67       784      44.9            4     13.65
 vidsrcme         1920x800   comityofcognomen.site 2133       55       98       42.3            4     4.78
-vidlove/vidapi   1920x800   a2.shows.st         404          168      400      23.7            4     4.78
 vixsrc           1920x1080  vixsrc.to           1529         152      928      4.4             2     2.18
 
 Fastest upstream: vidking/YORU at 44.9 Mbit/s (single sequential connection)

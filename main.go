@@ -32,7 +32,7 @@ func main() {
 	// below replaces it once TMDB answers.
 	store.LoadSnapshot()
 
-	// Server-side subtitle ladder: VidKing/VidLove ship no embedded
+	// Server-side subtitle ladder: VidKing ships no embedded
 	// subtitle renditions, so resolve external subtitles during Resolve() and embed
 	// them into the master manifest for native-HLS engines (smart TVs).
 	resolver.SubRenditionProvider = func(ctx context.Context, req mediaresolver.MediaRequest) []mediaresolver.SubRendition {
