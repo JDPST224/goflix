@@ -84,7 +84,7 @@ parsed leniently — an invalid value falls back to the default.
 | `USERDATA_FILE` | `userdata.json` | Per-account synced data store (`-` = memory only) |
 | `RESOLUTION_CACHE_FILE` | `resolutions.json` | Resolution cache persistence (`-` = memory only) |
 | `CATALOG_SNAPSHOT_FILE` | `catalog_snapshot.json` | Catalog caches persisted across restarts (`-` = off) |
-| `IMAGES_DIR` | `images` | Disk cache for the `/api/img` poster proxy (`-` = redirect to CDN) |
+| `IMAGES_DIR` | `-` (off) | Disk cache for the `/api/img` poster proxy (`-` = redirect to the TMDB CDN; set a folder name to cache posters on disk) |
 | `AUTH_RATE_PER_MIN` / `RESOLVE_RATE_PER_MIN` | `10` / `10` | Per-IP rate limits (login+register / media resolutions) |
 | `TLS_CERT` / `TLS_KEY` | — | Serve HTTPS when both set; session cookies become `Secure` |
 | `DEBUG_PPROF` | `false` | Mount Go pprof endpoints under `/debug/pprof/` |

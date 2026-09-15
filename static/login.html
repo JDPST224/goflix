@@ -1,0 +1,614 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#141414">
+    <link rel="icon"
+        href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%23e50914'/%3E%3Ctext x='32' y='45' font-family='Arial, sans-serif' font-size='38' font-weight='900' fill='%23ffffff' text-anchor='middle'%3EG%3C/text%3E%3C/svg%3E">
+    <title>GoFlix — Sign in</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Outfit:wght@700;800;900&family=Inter:wght@400;500;600;700&display=swap"
+        rel="stylesheet">
+    <style>
+        :root {
+            --bg: #141414;
+            --accent: #e50914;
+            --text: #ffffff;
+            --text-secondary: #b3b3b3;
+            --text-muted: #9a9a9a;
+            --text-faint: #6d6d6d;
+            --ease-out: cubic-bezier(0.5, 0, 0.1, 1);
+            --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        html, body { height: 100%; }
+        body {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            background: var(--bg);
+            font-family: 'Inter', 'Segoe UI', Arial, sans-serif;
+            color: var(--text);
+            padding: 24px 16px;
+            overflow-x: hidden;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+        }
+
+        /* ── Cinematic backdrop: drifting glows, film grain, vignette ── */
+        .bg {
+            position: fixed;
+            inset: 0;
+            z-index: 0;
+            overflow: hidden;
+            pointer-events: none;
+        }
+        .orb {
+            position: absolute;
+            border-radius: 50%;
+            filter: blur(90px);
+            will-change: transform;
+        }
+        .orb-a {
+            width: 640px;
+            height: 640px;
+            top: -260px;
+            left: 50%;
+            margin-left: -320px;
+            background: radial-gradient(circle at 50% 50%, rgba(229, 9, 20, 0.20), transparent 65%);
+            animation: drift-a 38s ease-in-out infinite alternate;
+        }
+        .orb-b {
+            width: 720px;
+            height: 720px;
+            bottom: -320px;
+            right: -180px;
+            background: radial-gradient(circle at 50% 50%, rgba(110, 130, 185, 0.11), transparent 65%);
+            animation: drift-b 46s ease-in-out infinite alternate;
+        }
+        @keyframes drift-a {
+            from { transform: translate3d(-60px, 20px, 0) scale(1); }
+            to   { transform: translate3d(80px, -30px, 0) scale(1.12); }
+        }
+        @keyframes drift-b {
+            from { transform: translate3d(40px, -20px, 0) scale(1.05); }
+            to   { transform: translate3d(-70px, 40px, 0) scale(0.95); }
+        }
+        .grain {
+            position: absolute;
+            inset: 0;
+            opacity: 0.05;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+        }
+        .vignette {
+            position: absolute;
+            inset: 0;
+            background: radial-gradient(120% 90% at 50% 40%, transparent 55%, rgba(0, 0, 0, 0.5) 100%);
+        }
+
+        /* ── Wordmark: homepage logo treatment + one-time sheen sweep ── */
+        .wordmark {
+            position: relative;
+            z-index: 1;
+            font-family: 'Outfit', 'Inter', sans-serif;
+            font-size: clamp(2.2rem, 6vw, 2.8rem);
+            font-weight: 900;
+            letter-spacing: 3px;
+            line-height: 1;
+            margin-bottom: 22px;
+            user-select: none;
+            background:
+                linear-gradient(115deg, transparent 42%, rgba(255, 255, 255, 0.55) 50%, transparent 58%) no-repeat,
+                linear-gradient(180deg, #ff5a52 0%, #e50914 48%, #a20610 100%);
+            background-size: 300% 100%, 100% 100%;
+            background-position: 130% 0, 0 0;
+            -webkit-background-clip: text;
+            background-clip: text;
+            color: transparent;
+            filter: drop-shadow(0 0 16px rgba(229, 9, 20, 0.45));
+            animation:
+                rise 0.55s var(--ease-out) both,
+                sheen 1.4s ease 0.55s both;
+        }
+        @keyframes sheen {
+            from { background-position: 130% 0, 0 0; }
+            to   { background-position: -130% 0, 0 0; }
+        }
+
+        /* ── Card: layered depth, gradient hairline, entrance ── */
+        .card {
+            position: relative;
+            z-index: 1;
+            width: min(400px, 94vw);
+            border-radius: 16px;
+            padding: 30px 28px 26px;
+            background: linear-gradient(180deg, #232323, #1a1a1a);
+            box-shadow:
+                inset 0 1px 0 rgba(255, 255, 255, 0.07),
+                0 24px 70px rgba(0, 0, 0, 0.6),
+                0 10px 28px rgba(0, 0, 0, 0.5);
+            animation: rise 0.6s var(--ease-out) 0.08s both;
+        }
+        .card::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            border-radius: inherit;
+            padding: 1px;
+            background: linear-gradient(180deg, rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0.05) 40%, rgba(0, 0, 0, 0.4));
+            -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+            -webkit-mask-composite: xor;
+            mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+            mask-composite: exclude;
+            pointer-events: none;
+        }
+        @keyframes rise {
+            from { opacity: 0; transform: translateY(14px); }
+            to   { opacity: 1; transform: translateY(0); }
+        }
+
+        /* ── Heading + subtitle ── */
+        .heading {
+            font-family: 'Outfit', 'Inter', sans-serif;
+            font-size: 1.35rem;
+            font-weight: 700;
+            letter-spacing: 0.2px;
+        }
+        .heading.swap { animation: heading-in 0.28s ease; }
+        @keyframes heading-in {
+            from { opacity: 0; transform: translateY(4px); }
+            to   { opacity: 1; transform: none; }
+        }
+        .sub {
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            margin-top: 4px;
+            min-height: 1.2em;
+        }
+
+        /* ── Tabs with sliding pill indicator ── */
+        .tabs {
+            position: relative;
+            display: flex;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.09);
+            border-radius: 11px;
+            padding: 4px;
+            margin: 18px 0 4px;
+        }
+        .tab-pill {
+            position: absolute;
+            top: 4px;
+            left: 4px;
+            width: calc(50% - 4px);
+            height: calc(100% - 8px);
+            border-radius: 8px;
+            background: var(--accent);
+            box-shadow: 0 4px 14px rgba(229, 9, 20, 0.4);
+            transition: transform 0.28s var(--ease-spring);
+            will-change: transform;
+        }
+        .tabs[data-mode="register"] .tab-pill { transform: translateX(100%); }
+        .tabs button {
+            position: relative;
+            z-index: 1;
+            flex: 1;
+            margin: 0;
+            padding: 9px 0;
+            border: 0;
+            border-radius: 8px;
+            background: transparent;
+            color: var(--text-secondary);
+            font-size: 0.92rem;
+            font-weight: 700;
+            font-family: inherit;
+            cursor: pointer;
+            transition: color 0.2s ease;
+        }
+        .tabs button.active { color: #fff; }
+        .tabs button:focus-visible {
+            outline: 2px solid rgba(229, 9, 20, 0.65);
+            outline-offset: 2px;
+        }
+
+        /* ── Form fields ── */
+        label {
+            display: block;
+            font-size: 0.76rem;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            color: var(--text-muted);
+            margin: 14px 0 6px;
+            transition: color 0.2s ease;
+        }
+        .f-row:has(input:focus) label { color: #cfcfcf; }
+        label .opt {
+            text-transform: none;
+            letter-spacing: 0;
+            font-weight: 500;
+            color: var(--text-faint);
+        }
+        .field { position: relative; }
+        .f-icon {
+            position: absolute;
+            left: 14px;
+            top: 50%;
+            transform: translateY(-50%);
+            color: var(--text-faint);
+            pointer-events: none;
+            z-index: 1;
+            transition: color 0.2s ease, transform 0.2s var(--ease-out);
+        }
+        .field:focus-within .f-icon {
+            color: var(--accent);
+            transform: translateY(-50%) translateX(1px);
+        }
+        input[type="text"],
+        input[type="password"],
+        input[type="email"] {
+            width: 100%;
+            padding: 13px 44px 13px 42px;
+            border-radius: 9px;
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            background: rgba(255, 255, 255, 0.06);
+            color: #fff;
+            font-size: 1rem;
+            font-family: inherit;
+            outline: none;
+            transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
+        }
+        input::placeholder { color: rgba(255, 255, 255, 0.28); }
+        input:focus {
+            border-color: rgba(229, 9, 20, 0.65);
+            background: rgba(255, 255, 255, 0.085);
+            box-shadow: 0 0 0 3px rgba(229, 9, 20, 0.14);
+        }
+        .pw-hint {
+            font-size: 0.75rem;
+            color: var(--text-faint);
+            margin-top: 6px;
+        }
+
+        /* ── Remember me ── */
+        .remember-row {
+            display: flex;
+            align-items: center;
+            gap: 9px;
+            margin-top: 16px;
+        }
+        .remember-row input[type="checkbox"] {
+            appearance: none;
+            -webkit-appearance: none;
+            width: 17px;
+            height: 17px;
+            min-width: 17px;
+            padding: 0;
+            border-radius: 4px;
+            border: 1px solid rgba(255, 255, 255, 0.25);
+            background: rgba(255, 255, 255, 0.06);
+            cursor: pointer;
+            position: relative;
+            transition: background 0.15s ease, border-color 0.15s ease;
+        }
+        .remember-row input[type="checkbox"]:hover { border-color: rgba(255, 255, 255, 0.5); }
+        .remember-row input[type="checkbox"]:checked {
+            background: #fff;
+            border-color: #fff;
+        }
+        .remember-row input[type="checkbox"]:checked::after {
+            content: '';
+            position: absolute;
+            left: 5px;
+            top: 1.5px;
+            width: 4px;
+            height: 8px;
+            border: solid #141414;
+            border-width: 0 2px 2px 0;
+            transform: rotate(45deg);
+        }
+        .remember-row input[type="checkbox"]:focus-visible {
+            outline: 2px solid rgba(229, 9, 20, 0.65);
+            outline-offset: 2px;
+        }
+        .remember-row label {
+            margin: 0;
+            text-transform: none;
+            letter-spacing: 0;
+            font-size: 0.85rem;
+            font-weight: 500;
+            color: var(--text-secondary);
+            cursor: pointer;
+            user-select: none;
+            transition: color 0.15s ease;
+        }
+        .remember-row label:hover { color: #fff; }
+
+        /* ── Animated eye toggle ── */
+        .eye {
+            position: absolute;
+            right: 6px;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 34px;
+            height: 34px;
+            background: transparent;
+            border: 0;
+            color: var(--text-muted);
+            cursor: pointer;
+            padding: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-family: inherit;
+            z-index: 1;
+            transition: color 0.15s ease;
+        }
+        .eye:hover { color: #fff; }
+        .eye-inner {
+            position: relative;
+            width: 18px;
+            height: 18px;
+            display: block;
+        }
+        .eye svg {
+            position: absolute;
+            inset: 0;
+            transition: opacity 0.18s ease, transform 0.3s ease;
+        }
+        .eye .i-hide { opacity: 0; transform: scale(0.4) rotate(-35deg); }
+        .eye.show .i-show { opacity: 0; transform: scale(0.4) rotate(35deg); }
+        .eye.show .i-hide { opacity: 1; transform: scale(1) rotate(0deg); }
+        .eye.pop .eye-inner { animation: eye-pop 0.28s ease; }
+        @keyframes eye-pop {
+            50% { transform: scale(1.25); }
+        }
+
+        /* ── Submit: primary white, shine sweep, loading spinner ── */
+        button[type="submit"] {
+            position: relative;
+            overflow: hidden;
+            width: 100%;
+            margin-top: 22px;
+            padding: 13px;
+            border: 0;
+            border-radius: 9px;
+            background: #ffffff;
+            color: #111;
+            font-size: 1rem;
+            font-weight: 700;
+            letter-spacing: 0.3px;
+            font-family: inherit;
+            cursor: pointer;
+            transition: background 0.15s ease, transform 0.1s ease, box-shadow 0.15s ease;
+        }
+        button[type="submit"]:hover {
+            background: rgba(255, 255, 255, 0.9);
+            box-shadow: 0 0 20px rgba(255, 255, 255, 0.4), 0 6px 24px rgba(255, 255, 255, 0.22);
+        }
+        button[type="submit"]:active { transform: scale(0.99); }
+        button[type="submit"]:disabled { opacity: 0.75; cursor: default; }
+        button[type="submit"]::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            left: -70%;
+            width: 45%;
+            background: linear-gradient(105deg, transparent, rgba(255, 255, 255, 0.6), transparent);
+            transform: skewX(-20deg);
+            transition: left 0.6s ease;
+            pointer-events: none;
+        }
+        button[type="submit"]:hover::after { left: 130%; }
+        .btn-label { display: inline-block; transition: opacity 0.15s ease; }
+        .btn-spinner {
+            position: absolute;
+            inset: 0;
+            display: none;
+            align-items: center;
+            justify-content: center;
+        }
+        button[type="submit"].loading .btn-label { opacity: 0; }
+        button[type="submit"].loading .btn-spinner { display: flex; }
+        .btn-spinner::after {
+            content: '';
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            border: 2px solid rgba(17, 17, 17, 0.25);
+            border-top-color: #111;
+            animation: spin 0.7s linear infinite;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        /* ── Error: boxed alert with icon, shake on appear ── */
+        .error {
+            margin-top: 14px;
+            min-height: 1.2em;
+            text-align: center;
+            font-size: 0.86rem;
+            color: #ff8080;
+        }
+        .error:not(:empty) {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            background: rgba(229, 9, 20, 0.08);
+            border: 1px solid rgba(229, 9, 20, 0.22);
+            border-radius: 9px;
+            padding: 10px 12px;
+        }
+        .error:not(:empty)::before {
+            content: '';
+            width: 15px;
+            height: 15px;
+            min-width: 15px;
+            background: #ff6b6b;
+            -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round'%3E%3Ccircle cx='12' cy='12' r='10'/%3E%3Cline x1='12' y1='8' x2='12' y2='12'/%3E%3Cline x1='12' y1='16' x2='12.01' y2='16'/%3E%3C/svg%3E") center/contain no-repeat;
+            mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round'%3E%3Ccircle cx='12' cy='12' r='10'/%3E%3Cline x1='12' y1='8' x2='12' y2='12'/%3E%3Cline x1='12' y1='16' x2='12.01' y2='16'/%3E%3C/svg%3E") center/contain no-repeat;
+        }
+        .error.shake { animation: shake 0.3s ease; }
+        @keyframes shake {
+            0%, 100% { transform: translateX(0); }
+            25% { transform: translateX(-5px); }
+            75% { transform: translateX(5px); }
+        }
+
+        /* ── Staggered entrance for form rows ── */
+        #form > * { animation: rise 0.45s var(--ease-out) both; }
+        #form > :nth-child(1) { animation-delay: 0.15s; }
+        #form > :nth-child(2) { animation-delay: 0.19s; }
+        #form > :nth-child(3) { animation-delay: 0.23s; }
+        #form > :nth-child(4) { animation-delay: 0.27s; }
+        #form > :nth-child(5) { animation-delay: 0.31s; }
+        #form > :nth-child(6) { animation-delay: 0.35s; }
+        #form > :nth-child(7) { animation-delay: 0.39s; }
+        #form > :nth-child(8) { animation-delay: 0.43s; }
+        #form > :nth-child(9) { animation-delay: 0.47s; }
+
+        .hidden { display: none !important; }
+
+        /* ── Reduced motion ── */
+        @media (prefers-reduced-motion: reduce) {
+            *, *::before, *::after {
+                animation-duration: 0.01ms !important;
+                animation-iteration-count: 1 !important;
+                transition-duration: 0.01ms !important;
+            }
+        }
+
+        /* ── Small screens ── */
+        @media (max-width: 420px) {
+            body { padding: 20px 12px; }
+            .wordmark { margin-bottom: 18px; }
+            .card { padding: 24px 18px 20px; }
+        }
+    </style>
+</head>
+<body>
+    <div class="bg" aria-hidden="true">
+        <div class="orb orb-a"></div>
+        <div class="orb orb-b"></div>
+        <div class="grain"></div>
+        <div class="vignette"></div>
+    </div>
+
+    <div class="wordmark" aria-hidden="true">GOFLIX</div>
+
+    <main class="card">
+        <h1 class="heading" id="heading">Sign in</h1>
+        <div class="sub" id="sub">Sign in to your account.</div>
+
+        <div class="tabs" id="tabs" data-mode="login">
+            <span class="tab-pill" aria-hidden="true"></span>
+            <button type="button" id="tab-login" class="active">Sign in</button>
+            <button type="button" id="tab-register">Create account</button>
+        </div>
+
+        <form id="form" novalidate>
+            <div class="f-row">
+                <label for="username">Username</label>
+                <div class="field">
+                    <svg class="f-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+                        <circle cx="12" cy="7" r="4"></circle>
+                    </svg>
+                    <input type="text" id="username" autocomplete="username" maxlength="32" placeholder="your-name" autofocus>
+                </div>
+            </div>
+
+            <div class="f-row">
+                <label for="password">Password</label>
+                <div class="field">
+                    <svg class="f-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="3" y="11" width="18" height="11" rx="2"></rect>
+                        <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+                    </svg>
+                    <input type="password" id="password" autocomplete="current-password" placeholder="••••••••">
+                    <button type="button" class="eye" id="toggle-pw" aria-label="Show password" tabindex="-1">
+                        <span class="eye-inner">
+                            <svg class="i-show" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"></path>
+                                <circle cx="12" cy="12" r="3"></circle>
+                            </svg>
+                            <svg class="i-hide" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"></path>
+                                <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"></path>
+                                <path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"></path>
+                                <line x1="1" y1="1" x2="23" y2="23"></line>
+                            </svg>
+                        </span>
+                    </button>
+                </div>
+                <div class="pw-hint hidden" id="pw-hint">4–128 characters.</div>
+            </div>
+
+            <div class="remember-row" id="remember-row">
+                <input type="checkbox" id="remember">
+                <label for="remember">Remember me</label>
+            </div>
+
+            <div id="confirm-row" class="f-row hidden">
+                <label for="confirm">Confirm password</label>
+                <div class="field">
+                    <svg class="f-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+                        <polyline points="9 12 11 14 15 10"></polyline>
+                    </svg>
+                    <input type="password" id="confirm" autocomplete="new-password" placeholder="••••••••">
+                    <button type="button" class="eye" id="toggle-confirm" aria-label="Show password" tabindex="-1">
+                        <span class="eye-inner">
+                            <svg class="i-show" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"></path>
+                                <circle cx="12" cy="12" r="3"></circle>
+                            </svg>
+                            <svg class="i-hide" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"></path>
+                                <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"></path>
+                                <path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"></path>
+                                <line x1="1" y1="1" x2="23" y2="23"></line>
+                            </svg>
+                        </span>
+                    </button>
+                </div>
+            </div>
+
+            <div id="email-row" class="f-row hidden">
+                <label for="email">Email <span class="opt">optional</span></label>
+                <div class="field">
+                    <svg class="f-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M4 4h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z"></path>
+                        <polyline points="22,6 12,13 2,6"></polyline>
+                    </svg>
+                    <input type="email" id="email" autocomplete="email" maxlength="254" placeholder="you@example.com">
+                </div>
+            </div>
+
+            <div id="invite-row" class="f-row hidden">
+                <label for="invite">Invite code</label>
+                <div class="field">
+                    <svg class="f-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"></path>
+                    </svg>
+                    <input type="password" id="invite" autocomplete="off" placeholder="from your server admin">
+                </div>
+            </div>
+
+            <button type="submit" id="submit">
+                <span class="btn-label">Sign in</span>
+                <span class="btn-spinner" aria-hidden="true"></span>
+            </button>
+            <div class="error" id="error" role="alert"></div>
+        </form>
+    </main>
+<script src="/js/login.js"></script>
+</body>
+</html>
