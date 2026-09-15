@@ -85,7 +85,7 @@ parsed leniently — an invalid value falls back to the default.
 | `RESOLUTION_CACHE_FILE` | `resolutions.json` | Resolution cache persistence (`-` = memory only) |
 | `CATALOG_SNAPSHOT_FILE` | `catalog_snapshot.json` | Catalog caches persisted across restarts (`-` = off) |
 | `IMAGES_DIR` | `-` (off) | Disk cache for the `/api/img` poster proxy (`-` = redirect to the TMDB CDN; set a folder name to cache posters on disk) |
-| `AUTH_RATE_PER_MIN` / `RESOLVE_RATE_PER_MIN` | `10` / `10` | Per-IP rate limits (login+register / media resolutions) |
+| `AUTH_RATE_PER_MIN` / `RESOLVE_RATE_PER_MIN` | `10` / `10` | Per-IP rate limits (login+register / media resolutions). `0`/unset → 10; the default is applied by the server layer (`server.New`), not by the config parser |
 | `TLS_CERT` / `TLS_KEY` | — | Serve HTTPS when both set; session cookies become `Secure` |
 | `DEBUG_PPROF` | `false` | Mount Go pprof endpoints under `/debug/pprof/` |
 | `VIXSRC_ORIGIN` / `VIDKING_ORIGIN` / `VIDSRCME_ORIGIN` / `VIDSRCME_DATA_ORIGIN` / `CINESRC_ORIGIN` | provider URLs | Override media source origins |
@@ -202,11 +202,15 @@ static/login.html + js/     sign-in / registration page
 ## Testing & Debugging
 
 Black-box test suites live in the `debug/` directory — they exercise the real
-mux and exported API only. White-box tests that reach into `mediaresolver`
-internals (unexported fields and helpers) must live beside the package they
-test, per Go's testing rules: `internal/mediaresolver/bandwidth_test.go`
-(live benchmark), `proxy_cache_test.go` (cache admission + read-ahead
-regressions) and `resolution_cache_test.go` (cache persistence round-trips).
+mux and exported API only. White-box tests that reach into package internals
+(unexported fields and helpers) must live beside the package they test, per
+Go's testing rules: `internal/mediaresolver/bandwidth_test.go` (live
+benchmark), `proxy_cache_test.go` (cache admission + read-ahead regressions),
+`resolution_cache_test.go` (cache persistence round-trips),
+`internal/config/config_test.go` (quoted-value parsing + lenient defaults),
+`internal/catalog/store_test.go` (concurrent snapshot writes) and
+`internal/mediaresolver/cinesrcjs/subtle_test.go` (WebCrypto shim: GCM nonce
+sizes, digest algorithms, argument guards).
 
 ### Running Unit Tests
 
@@ -214,6 +218,14 @@ Run all black-box suites in `debug/`:
 
 ```bash
 go test ./debug/... -v
+```
+
+Or run all tests across the repository (add `-short` to skip the live-upstream
+suites — `TestBandwidth` skips in short mode and the CineSrc live tests
+self-skip without `CINESRC_LIVE=1`; this is exactly what CI runs, with `-race`):
+
+```bash
+go test -short ./... -v
 ```
 
 Or run all tests across the repository:
@@ -322,7 +334,15 @@ Fastest upstream: vidking/YORU at 44.9 Mbit/s (single sequential connection)
   directly. hls.js 1.7.0 is vendored at `static/vendor/hls.min.js` (served
   with an immutable cache policy), so playback works without third-party CDNs.
 - Dependencies: Go standard library, `chromedp/chromedp` (fallback scraper),
-  `golang.org/x/crypto` (bcrypt password hashing).
+  `golang.org/x/crypto` (bcrypt password hashing), `dop251/goja` +
+  `tetratelabs/wazero` (CineSrc direct resolution — embedded JS runtime and
+  PoW WASM, no browser involved).
+- CineSrc treats a TV season or episode of `0` as "unset" when building its
+  embed URL, so TMDB season-0 specials resolve through the generic embed
+  instead of the s/e-scoped one. Other providers pass `0` through verbatim.
+- CI (`.github/workflows/ci.yml`) runs build, `go vet`, the test suite with
+  `-race -short`, and golangci-lint (config in `.golangci.yml`) on every
+  push/PR.
 
 > **Security:** if your `config.conf` holds real TMDB credentials, treat them
 > like passwords — don't share the file. Rotate any key that has ever been

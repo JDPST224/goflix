@@ -12,7 +12,7 @@ import { mediaKey } from './utils.js';
 
 // One-time migration: data saved before the GoFlix rename lived under
 // `gsflix_*` keys. Copy anything found across once, then drop the legacy
-// entries â€” devices that already used the app keep their list and progress.
+// entries — devices that already used the app keep their list and progress.
 (function migrateLegacyStorageKeys() {
     const keys = ['goflix_mylist', 'goflix_progress', 'goflix_cw', 'goflix_volume', 'goflix_removed'];
     keys.forEach((k) => {
@@ -23,12 +23,12 @@ import { mediaKey } from './utils.js';
             }
             localStorage.removeItem(legacy);
         } catch (_) {
-            // Storage blocked (private mode etc.) â€” reads/writes below no-op too.
+            // Storage blocked (private mode etc.) — reads/writes below no-op too.
         }
     });
 })();
 
-// â”€â”€â”€ Local read/write helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── Local read/write helpers ─────────────────────────────────────────────
 function readJSON(key, fallback) {
     try {
         const v = JSON.parse(localStorage.getItem(key) || 'null');
@@ -41,7 +41,7 @@ function writeJSON(key, value) {
     try { localStorage.setItem(key, JSON.stringify(value)); } catch (_) {}
 }
 
-// â”€â”€â”€ My List â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── My List ──────────────────────────────────────────────────────────────
 export function getMyList() {
     const list = readJSON('goflix_mylist', []);
     return Array.isArray(list) ? list : [];
@@ -73,7 +73,7 @@ export function toggleMyList(movie) {
     return added;
 }
 
-// â”€â”€â”€ Progress tracking â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── Progress tracking ────────────────────────────────────────────────────
 export function getProgress(movie) {
     const prog = readJSON('goflix_progress', {});
     const key = mediaKey(movie);
@@ -94,7 +94,7 @@ export function saveProgress(movie, season, episode, position, duration) {
         duration: Number.isFinite(duration) && duration > 0
             ? Math.floor(duration)
             : (sameEpisode ? previous.duration || 0 : 0),
-        // Client clock of this save â€” the server merges concurrent edits
+        // Client clock of this save — the server merges concurrent edits
         // from multiple devices by this timestamp.
         at: Date.now()
     };
@@ -102,7 +102,7 @@ export function saveProgress(movie, season, episode, position, duration) {
     queueSync();
 }
 
-// â”€â”€â”€ Continue watching â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── Continue watching ────────────────────────────────────────────────────
 export function addToContinueWatching(movie) {
     let cw = readJSON('goflix_cw', []);
     const key = mediaKey(movie);
@@ -132,7 +132,7 @@ export function removeFromContinueWatching(movie) {
 
 // clearLocalUserData wipes every synced dataset (and the account binding)
 // from this browser. Called on sign-out: the server already holds the
-// account's state, so nothing is lost â€” but a shared computer's next
+// account's state, so nothing is lost — but a shared computer's next
 // visitor starts clean instead of inheriting the previous user's list
 // and progress in localStorage.
 export function clearLocalUserData() {
@@ -143,7 +143,7 @@ export function clearLocalUserData() {
     syncState = 'off'; // anonymous until the next sign-in
 }
 
-// â”€â”€â”€ A/V preferences (audio + subtitle language memory) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── A/V preferences (audio + subtitle language memory) ───────────────────
 // {"audio": "eng", "sub": "eng"|"off", "at": ...}. Remembered across
 // episodes and devices (synced with the userdata blob, newest clock wins).
 export function getAVPrefs() {
@@ -157,8 +157,8 @@ export function saveAVPrefs(patch) {
     queueSync();
 }
 
-// â”€â”€â”€ Watch history (derived from progress) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// A title counts as watched when the last saved position is â‰¥ 92% of its
+// ─── Watch history (derived from progress) ────────────────────────────────
+// A title counts as watched when the last saved position is ≥ 92% of its
 // duration. No extra storage: progress already tracks position+duration+at
 // for everything played.
 const WATCHED_RATIO = 0.92;
@@ -171,8 +171,8 @@ export function isWatched(movie) {
     return watchedRatio(movie) >= WATCHED_RATIO;
 }
 
-// â”€â”€â”€ Removal tombstones â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// mediaKey â†’ timestamp of the removal. An entry (list item or CW item) whose
+// ─── Removal tombstones ───────────────────────────────────────────────────
+// mediaKey → timestamp of the removal. An entry (list item or CW item) whose
 // own timestamp is older than the tombstone stays deleted everywhere.
 function tombstone(key, at, removed) {
     const t = readJSON('goflix_removed', {});
@@ -197,14 +197,14 @@ function applyTombstones(list, atField) {
     });
 }
 
-// â”€â”€â”€ Server sync â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── Server sync ──────────────────────────────────────────────────────────
 let syncTimer = null;
 let syncState = 'pending'; // pending | on | off
 
 // The local data belongs to ONE account (localStorage is per-browser, not
 // per-account). goflix_user records which one; on an account switch the
-// local state is wiped â€” it stays safe on the server under the previous
-// account â€” and the new account's state is pulled down.
+// local state is wiped — it stays safe on the server under the previous
+// account — and the new account's state is pulled down.
 const USER_KEY = 'goflix_user';
 function localUser() {
     try { return localStorage.getItem(USER_KEY) || ''; } catch { return ''; }
@@ -272,7 +272,7 @@ async function syncNowInternal() {
             if (syncState !== 'on') {
                 syncState = 'on';
                 // First successful sync: the Continue Watching row may not
-                // have existed locally before the merge â€” let the app
+                // have existed locally before the merge — let the app
                 // re-render the home rows with the merged data.
                 window.dispatchEvent(new Event('goflix:userdata-synced'));
             }
@@ -304,12 +304,12 @@ let initPromise = (async function initialSync() {
         }
         user = s.user;
     } catch (_) {
-        // Status unreachable â”” attempt the sync under whatever binding exists.
+        // Status unreachable — attempt the sync under whatever binding exists.
     }
     const bound = localUser();
     if (user && bound && user !== bound) {
         // Different known account on this browser: local data belongs to
-        // the previous account (still safe on the server) â”” start clean.
+        // the previous account (still safe on the server) — start clean.
         wipeLocalUserData();
     }
     setLocalUser(user);

@@ -48,6 +48,7 @@ type Resolver struct {
 	mu               sync.Mutex
 	assets           *assets
 	pow              *powRuntime       // compiled once, shared across resolves
+	refreshing       chan struct{}     // non-nil while an ensureAssets scan is in flight
 	pkBody           map[string]string // /api/c/pk responses (static key), keyed by URL
 	canvasCalls      int
 	providers        []string // ranked source-server ids from getProviderList
@@ -185,7 +186,7 @@ func (r *Resolver) attemptServer(ctx context.Context, origin, ua, mediaType, tmd
 	}
 	console := func(s string) { r.logf("vm: %s", s) }
 	pathBase := "/embed/" + mediaType + "/" + tmdbID
-	rtDonut, err := newRuntime(origin, pathBase, ua, r.fingerprint(), jar, r.Transport, console)
+	rtDonut, err := newRuntime(ctx, origin, pathBase, ua, r.fingerprint(), jar, r.Transport, console)
 	if err != nil {
 		return nil, err
 	}
@@ -194,7 +195,7 @@ func (r *Resolver) attemptServer(ctx context.Context, origin, ua, mediaType, tmd
 	rtDonut.storePK = r.pkStore
 	rtDonut.nextCanvas = r.nextCanvas
 
-	rtD6, err := newRuntime(origin, pathBase, ua, r.fingerprint(), jar, r.Transport, console)
+	rtD6, err := newRuntime(ctx, origin, pathBase, ua, r.fingerprint(), jar, r.Transport, console)
 	if err != nil {
 		return nil, err
 	}
@@ -581,13 +582,64 @@ func (rt *runtime) decrypt(ctx context.Context, cipher string) (*Result, error) 
 
 // ensureAssets fetches and caches donut.js, the versioned *-prod.js module
 // and the PoW wasm. The module names live in the embed's app chunk.
+// The network work runs WITHOUT r.mu: holding the lock across the embed fetch,
+// chunk scan and asset downloads (tens of seconds in the worst case) stalled
+// every other Resolve and every sharedPow/pk RPC behind one refresh. A
+// refreshing flag single-flights the refresh itself so concurrent resolves
+// join one scan instead of racing duplicate ones.
 func (r *Resolver) ensureAssets(ctx context.Context, origin, ua string) error {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	if r.assets != nil && time.Since(r.assets.fetched) < time.Hour {
+		r.mu.Unlock()
 		return nil
 	}
+	if inFlight := r.refreshing; inFlight != nil {
+		r.mu.Unlock()
+		// Another Resolve is already refreshing; wait for it and use
+		// whatever it committed instead of racing a duplicate scan.
+		select {
+		case <-inFlight:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		r.mu.Lock()
+		fresh := r.assets != nil && time.Since(r.assets.fetched) < time.Hour
+		r.mu.Unlock()
+		if fresh {
+			return nil
+		}
+		return errors.New("cinesrcjs: asset refresh failed (joined in-flight refresh)")
+	}
+	refreshing := make(chan struct{})
+	r.refreshing = refreshing
+	r.mu.Unlock()
+	defer func() {
+		r.mu.Lock()
+		r.refreshing = nil
+		r.mu.Unlock()
+		close(refreshing)
+	}()
 
+	a, p, err := r.fetchAssets(ctx, origin, ua)
+	if err != nil {
+		return err
+	}
+	// Commit under the lock; the replaced PoW runtime is closed here, the
+	// same way resetAssets releases it.
+	r.mu.Lock()
+	if r.pow != nil {
+		r.pow.close() // release the replaced runtime's module + engine
+	}
+	r.pow = p
+	r.assets = a
+	r.mu.Unlock()
+	return nil
+}
+
+// fetchAssets performs the actual network work of ensureAssets and returns
+// the populated asset set together with a warmed PoW runtime, holding no
+// locks. The caller commits them to the Resolver under r.mu.
+func (r *Resolver) fetchAssets(ctx context.Context, origin, ua string) (*assets, *powRuntime, error) {
 	client := &http.Client{Transport: r.Transport, Timeout: 20 * time.Second}
 	get := func(path string) ([]byte, error) {
 		req, err := http.NewRequestWithContext(ctx, "GET", origin+path, nil)
@@ -612,7 +664,7 @@ func (r *Resolver) ensureAssets(ctx context.Context, origin, ua string) error {
 	// late in the list, so a sequential scan costs seconds.
 	html, err := get("/embed/movie/550")
 	if err != nil {
-		return fmt.Errorf("cinesrcjs: embed page: %w", err)
+		return nil, nil, fmt.Errorf("cinesrcjs: embed page: %w", err)
 	}
 	var names []string
 	for _, m := range reChunkSrc.FindAllStringSubmatch(string(html), -1) {
@@ -659,7 +711,7 @@ func (r *Resolver) ensureAssets(ctx context.Context, origin, ua string) error {
 	}
 	wgScan.Wait()
 	if prodName == "" {
-		return errors.New("cinesrcjs: could not locate challenge module script")
+		return nil, nil, errors.New("cinesrcjs: could not locate challenge module script")
 	}
 	if powName == "" {
 		powName = "/pow-v3.wasm"
@@ -676,37 +728,33 @@ func (r *Resolver) ensureAssets(ctx context.Context, origin, ua string) error {
 	go func() { defer wgFetch.Done(); wasm, wErr = get(powName) }()
 	wgFetch.Wait()
 	if pErr != nil {
-		return fmt.Errorf("cinesrcjs: %s: %w", prodName, pErr)
+		return nil, nil, fmt.Errorf("cinesrcjs: %s: %w", prodName, pErr)
 	}
 	if dErr != nil {
-		return fmt.Errorf("cinesrcjs: /donut.js: %w", dErr)
+		return nil, nil, fmt.Errorf("cinesrcjs: /donut.js: %w", dErr)
 	}
 	if wErr != nil {
-		return fmt.Errorf("cinesrcjs: %s: %w", powName, wErr)
+		return nil, nil, fmt.Errorf("cinesrcjs: %s: %w", powName, wErr)
 	}
 
-	r.assets = &assets{prodURL: prodName, prod: prod, donut: donut, powWasm: wasm, actions: actions, fetched: time.Now()}
-	if r.assets.actions["getStream"] == "" {
+	a := &assets{prodURL: prodName, prod: prod, donut: donut, powWasm: wasm, actions: actions, fetched: time.Now()}
+	if a.actions["getStream"] == "" {
 		r.logf("warning: getStream action id not found in app chunks; using fallback %s", getStreamAction)
 	}
-	if r.assets.actions["getProviderList"] == "" {
+	if a.actions["getProviderList"] == "" {
 		r.logf("warning: getProviderList action id not found in app chunks; using fallback %s", getProviderListAction)
 	}
 	// Warm the wasm through a dummy solve so the first real RPC (which has a
 	// short client-side timeout) completes within milliseconds.
 	p, perr := newPowRuntime(wasm)
 	if perr != nil {
-		return fmt.Errorf("cinesrcjs: pow wasm: %w", perr)
+		return nil, nil, fmt.Errorf("cinesrcjs: pow wasm: %w", perr)
 	}
 	if _, err := p.solve(dummyChallenge()); err != nil {
 		p.close()
-		return fmt.Errorf("cinesrcjs: pow warmup: %w", err)
+		return nil, nil, fmt.Errorf("cinesrcjs: pow warmup: %w", err)
 	}
-	if r.pow != nil {
-		r.pow.close() // release the replaced runtime's module + engine
-	}
-	r.pow = p
-	return nil
+	return a, p, nil
 }
 
 // dummyChallenge is a well-formed CSP3 blob for warmup only (never sent).

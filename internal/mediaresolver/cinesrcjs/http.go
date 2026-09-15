@@ -4,9 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
-	"net/url"
+	"strings"
 )
 
 // postJSON posts a JSON body (or none, when body is nil) and parses the JSON
@@ -26,6 +27,12 @@ func (rt *runtime) postJSON(ctx context.Context, path string, headers map[string
 		return nil, err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		// Decode failures on an HTML error page read as cryptic JSON
+		// errors; surface the status (and a body snippet) instead.
+		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
+		return nil, fmt.Errorf("%s: status %d: %s", path, resp.StatusCode, strings.TrimSpace(string(snippet)))
+	}
 	var out map[string]any
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&out); err != nil {
 		return nil, err
@@ -40,6 +47,10 @@ func (rt *runtime) postRaw(ctx context.Context, path string, headers map[string]
 		return "", err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
+		return "", fmt.Errorf("%s: status %d: %s", path, resp.StatusCode, strings.TrimSpace(string(snippet)))
+	}
 	b, err := io.ReadAll(io.LimitReader(resp.Body, 1<<22))
 	if err != nil {
 		return "", err
@@ -68,17 +79,12 @@ func (rt *runtime) do(ctx context.Context, method, path string, headers map[stri
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
-	if ck := rt.cookieHeader(); ck != "" {
-		req.Header.Set("cookie", ck)
-	}
+	// Session cookies come from the client's jar (set by newRuntime),
+	// which also stores Set-Cookie from every redirect hop under the
+	// response's own URL.
 	resp, err := rt.client.Do(req)
 	if err != nil {
 		return nil, err
-	}
-	if cookies := resp.Cookies(); len(cookies) > 0 {
-		if u, perr := url.Parse(abs); perr == nil {
-			rt.jar.SetCookies(u, cookies)
-		}
 	}
 	return resp, nil
 }

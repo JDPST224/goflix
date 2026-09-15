@@ -26,11 +26,14 @@ var startEpoch = time.Now()
 type runtime struct {
 	vm       *goja.Runtime
 	client   *http.Client
-	jar      *cookiejar.Jar
 	origin   string
 	pagePath string
 	ua       string
 	fp       Fingerprint
+	// ctx is the owning Resolve's deadline/cancellation. The fetch shim
+	// runs on VM goroutines, so the resolve ctx must travel with the
+	// runtime instead of being passed per call.
+	ctx context.Context
 
 	mu         sync.Mutex
 	injected   map[string]string               // x-cs-* headers injected around gc()
@@ -45,12 +48,20 @@ type runtime struct {
 	consoleFn  func(string)
 }
 
-func newRuntime(origin, pagePath, ua string, fp Fingerprint, jar *cookiejar.Jar, transport http.RoundTripper, consoleFn func(string)) (*runtime, error) {
-	client := &http.Client{Transport: transport, Timeout: 15 * time.Second}
+func newRuntime(ctx context.Context, origin, pagePath, ua string, fp Fingerprint, jar *cookiejar.Jar, transport http.RoundTripper, consoleFn func(string)) (*runtime, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	// The jar belongs to the client: net/http then stores Set-Cookie from
+	// every response in the redirect chain under the response's own URL and
+	// re-attaches cookies per request URL — the same semantics the embed's
+	// browser session has. (The previous manual header/copy lost cookies
+	// emitted on intermediate redirect hops and mis-keyed final ones.)
+	client := &http.Client{Transport: transport, Timeout: 15 * time.Second, Jar: jar}
 	rt := &runtime{
 		vm:        goja.New(),
 		client:    client,
-		jar:       jar,
+		ctx:       ctx,
 		origin:    strings.TrimRight(origin, "/"),
 		pagePath:  pagePath,
 		ua:        ua,
@@ -564,7 +575,9 @@ func (rt *runtime) fetchShim(call goja.FunctionCall) goja.Value {
 		headers[strings.ToLower(k)] = v
 	}
 	rt.mu.Unlock()
-	headers["cookie"] = rt.cookieHeader()
+	// Cookie is a forbidden fetch header in the browser: JS cannot set it,
+	// and the client's jar supplies the session cookies per request URL.
+	delete(headers, "cookie")
 	headers["user-agent"] = rt.ua
 	headers["origin"] = rt.origin
 	headers["referer"] = rt.origin + "/"
@@ -606,7 +619,7 @@ func (rt *runtime) fetchShim(call goja.FunctionCall) goja.Value {
 		}
 	}
 
-	req, err := http.NewRequest(method, abs, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(rt.ctx, method, abs, bytes.NewReader(body))
 	if err != nil {
 		_ = reject(vm.NewGoError(err))
 		return vm.ToValue(p)
@@ -628,11 +641,6 @@ func (rt *runtime) fetchShim(call goja.FunctionCall) goja.Value {
 	if err != nil {
 		_ = reject(vm.NewGoError(err))
 		return vm.ToValue(p)
-	}
-	if cookies := resp.Cookies(); len(cookies) > 0 {
-		if u, err := url.Parse(abs); err == nil {
-			rt.jar.SetCookies(u, cookies)
-		}
 	}
 	if strings.HasSuffix(pathOf(abs), "/api/c/pk") && rt.storePK != nil {
 		rt.storePK(abs, string(bodyBytes))
@@ -676,19 +684,6 @@ func (rt *runtime) fetchShim(call goja.FunctionCall) goja.Value {
 
 	_ = resolve(respObj)
 	return vm.ToValue(p)
-}
-
-func (rt *runtime) cookieHeader() string {
-	u, err := url.Parse(rt.origin + rt.pagePath)
-	if err != nil {
-		return ""
-	}
-	cookies := rt.jar.Cookies(u)
-	parts := make([]string, 0, len(cookies))
-	for _, c := range cookies {
-		parts = append(parts, c.Name+"="+c.Value)
-	}
-	return strings.Join(parts, "; ")
 }
 
 func resolveURL(raw, origin string) (string, error) {

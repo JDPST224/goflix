@@ -1,4 +1,4 @@
-﻿package server
+package server
 
 // Cross-device userdata sync: My List, playback progress and the
 // Continue Watching list live in the browser's localStorage; these endpoints
@@ -25,7 +25,7 @@ type progressEntry struct {
 	Episode  int     `json:"episode"`
 	Position float64 `json:"position"`
 	Duration float64 `json:"duration"`
-	// At is the client clock (ms since epoch) of the last save â€” the merge
+	// At is the client clock (ms since epoch) of the last save — the merge
 	// winner for concurrent edits from two devices.
 	At int64 `json:"at,omitempty"`
 }
@@ -35,7 +35,7 @@ type userDataState struct {
 	MyList   []json.RawMessage        `json:"mylist"`
 	Progress map[string]*progressEntry `json:"progress"`
 	CW       []json.RawMessage        `json:"cw"`
-	// Removed maps mediaKey â†’ removal timestamp (client clock ms): a
+	// Removed maps mediaKey → removal timestamp (client clock ms): a
 	// tombstone that keeps one device's deletion from being resurrected by
 	// another device's older copy. Entries newer than the tombstone
 	// (re-adds) survive it.
@@ -72,7 +72,7 @@ func NewUserDataStore(path string) *userDataStore {
 		return s // first run
 	}
 	// v2: {"version":2,"users":{"<uid>":{...}}}. Legacy v1 files are the
-	// old single-household state â€” kept aside and adopted by the first
+	// old single-household state — kept aside and adopted by the first
 	// account so an upgrade keeps its data.
 	var probe map[string]json.RawMessage
 	if err := json.Unmarshal(data, &probe); err != nil {
@@ -262,7 +262,7 @@ func (st *userDataState) merge(in userDataState) userDataState {
 		merged.CW = append(merged.CW, cwByKey[k])
 	}
 
-	// Tombstones: union keeping the newest removal per keyâ€¦
+	// Tombstones: union keeping the newest removal per key…
 	merged.Removed = map[string]int64{}
 	for k, at := range st.Removed {
 		merged.Removed[k] = at
@@ -272,7 +272,7 @@ func (st *userDataState) merge(in userDataState) userDataState {
 			merged.Removed[k] = at
 		}
 	}
-	// â€¦then drop list/CW entries the tombstones outrank. Entries carry
+	// …then drop list/CW entries the tombstones outrank. Entries carry
 	// their own timestamps (listAt / at); anything older than the
 	// tombstone stays deleted everywhere. My List items are filtered
 	// against their listAt field by re-reading the raw objects.
