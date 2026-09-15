@@ -3951,21 +3951,20 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         clearTimeout(controlsHideTimer);
         clearTimeout(playerCloseTimer);
-        // Stop audio/video immediately — destroying hls.js here (rather than
-        // in the timer below) means nothing keeps playing during the
-        // fade-out. Element-level cleanup stays in the timer.
+        // Final progress save BEFORE teardown: destroying hls.js detaches the
+        // media element, which resets currentTime to 0 and fires a trailing
+        // timeupdate — the rewind rule in that handler then records a bogus
+        // position 0 (and the currentTime>0 guard here would skip the real
+        // save), silently erasing the resume point.
+        if (currentPlayerMovie && vixPlayer && Number.isFinite(vixPlayer.currentTime) && vixPlayer.currentTime > 0) {
+            saveProgress(currentPlayerMovie, currentPlayerSeason, currentPlayerEpisode, vixPlayer.currentTime, vixPlayer.duration);
+            lastSavedPlaybackSecond = vixPlayer.currentTime;
+        }
         if (vixHlsInstance) {
             vixHlsInstance.destroy();
             vixHlsInstance = null;
         }
         vixPlayer.pause();
-        // Final progress save: the timeupdate throttle only fires every 5s of
-        // forward play, so closing the modal right after a rewind (or within
-        // that window) would otherwise keep the stale position.
-        if (currentPlayerMovie && vixPlayer && Number.isFinite(vixPlayer.currentTime) && vixPlayer.currentTime > 0) {
-            saveProgress(currentPlayerMovie, currentPlayerSeason, currentPlayerEpisode, vixPlayer.currentTime, vixPlayer.duration);
-            lastSavedPlaybackSecond = vixPlayer.currentTime;
-        }
         playerModal.classList.remove('show');
         playerModal.setAttribute('aria-hidden', 'true');
         syncBodyOverflow();
@@ -4092,7 +4091,14 @@ document.addEventListener('DOMContentLoaded', () => {
         if (playerProgress) { const pct = duration ? (vixPlayer.currentTime / duration) * 100 : 0; playerProgress.value = pct; playerProgress.style.setProperty('--progress', `${pct}%`); }
         if (playerTimeCurrent) playerTimeCurrent.textContent = formatPlayerTime(vixPlayer.currentTime);
         if (playerTimeDuration) playerTimeDuration.textContent = formatPlayerTime(duration);
-        if (currentPlayerMovie && (vixPlayer.currentTime - lastSavedPlaybackSecond >= 5 || vixPlayer.currentTime < lastSavedPlaybackSecond - 2)) {
+        // Only save while real media is loaded: a launch teardown (hls.js
+        // destroy / src removal) resets currentTime to 0 and fires a trailing
+        // timeupdate, which the rewind rule below would read as a backward
+        // seek and persist as position 0 — wiping the real resume point.
+        const mediaLive = vixPlayer.readyState > 0 &&
+            Number.isFinite(vixPlayer.duration) && vixPlayer.duration > 0 &&
+            vixPlayer.currentTime > 0;
+        if (currentPlayerMovie && mediaLive && (vixPlayer.currentTime - lastSavedPlaybackSecond >= 5 || vixPlayer.currentTime < lastSavedPlaybackSecond - 2)) {
             // Also saves after a backward seek: the ≥5s-forward rule alone
             // would leave the remembered position at the stale, farther-ahead
             // value until playback re-advanced past it, so closing right
