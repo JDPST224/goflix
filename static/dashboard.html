@@ -1,0 +1,424 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="theme-color" content="#141414">
+    <meta name="robots" content="noindex, nofollow">
+    <link rel="icon"
+        href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%23e50914'/%3E%3Ctext x='32' y='45' font-family='Arial, sans-serif' font-size='38' font-weight='900' fill='%23ffffff' text-anchor='middle'%3EG%3C/text%3E%3C/svg%3E">
+    <title>GoFlix — Admin Console</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Outfit:wght@600;700;800;900&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600&display=swap"
+        rel="stylesheet">
+    <link rel="stylesheet" href="/css/dashboard.css">
+</head>
+
+<body>
+    <a class="skip-link" href="#overview">Skip to dashboard content</a>
+    <div class="bg-fx" aria-hidden="true">
+        <div class="orb orb-a"></div>
+        <div class="orb orb-b"></div>
+        <div class="grid"></div>
+    </div>
+
+    <!-- ═══ Sidebar ═══ -->
+    <aside class="rail" id="rail">
+        <nav class="rail-scroll" aria-label="Dashboard sections">
+            <div class="nav-group">
+                <div class="nav-group-label">Monitor</div>
+                <a class="nav-item active" href="#overview" data-section="overview">
+                    <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg>
+                    Overview
+                </a>
+                <a class="nav-item" href="#streams" data-section="streams">
+                    <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M10 8.5l6 3.5-6 3.5v-7z"/></svg>
+                    Streaming
+                    <span class="nav-count" id="nav-count-streams">–</span>
+                </a>
+                <a class="nav-item" href="#bandwidth" data-section="bandwidth">
+                    <svg viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="M7 14l4-4 3 3 5-6"/></svg>
+                    Bandwidth
+                </a>
+            </div>
+
+            <div class="nav-group">
+                <div class="nav-group-label">Manage</div>
+                <a class="nav-item" href="#accounts" data-section="accounts">
+                    <svg viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+                    Accounts
+                    <span class="nav-count" id="nav-count-accounts">–</span>
+                </a>
+                <a class="nav-item" href="#system" data-section="system">
+                    <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="6" rx="2"/><rect x="3" y="14" width="18" height="6" rx="2"/><path d="M7 7h.01M7 17h.01"/></svg>
+                    System
+                </a>
+            </div>
+
+            <div class="nav-group">
+                <div class="nav-group-label">Shortcuts</div>
+                <a class="nav-item" href="/">
+                    <svg viewBox="0 0 24 24"><path d="M3 11l9-8 9 8"/><path d="M5 10v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V10"/></svg>
+                    Back to GoFlix
+                </a>
+                <a class="nav-item" href="/account">
+                    <svg viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                    My account
+                </a>
+            </div>
+        </nav>
+
+        <div class="rail-foot">
+            <div class="rail-user">
+                <img id="rail-avatar" alt="" width="30" height="30"
+                    src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%23e50914'/%3E%3Ctext x='32' y='45' font-family='Arial, sans-serif' font-size='38' font-weight='900' fill='%23ffffff' text-anchor='middle'%3EG%3C/text%3E%3C/svg%3E">
+                <div class="rail-user-meta">
+                    <div class="rail-user-name" id="rail-username">…</div>
+                    <div class="rail-user-role">Administrator</div>
+                </div>
+            </div>
+            <button type="button" class="btn btn-ghost" id="logout-btn" style="width:100%">
+                <svg viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+                Sign out
+            </button>
+        </div>
+    </aside>
+
+    <!-- ═══ Main column ═══ -->
+    <div class="main">
+        <header class="topbar">
+            <button type="button" class="btn btn-icon rail-toggle" id="rail-toggle" aria-label="Open navigation"
+                aria-controls="rail" aria-expanded="false">
+                <svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+            </button>
+            <div class="crumbs">
+                <span class="crumb-root">GoFlix</span>
+                <span class="crumb-sep">/</span>
+                <span class="crumb-current" id="crumb-current">Overview</span>
+            </div>
+            <div class="topbar-actions">
+                <button type="button" class="btn btn-icon" id="refresh-btn" aria-label="Refresh now" title="Refresh now">
+                    <svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><polyline points="21 3 21 9 15 9"/></svg>
+                </button>
+            </div>
+        </header>
+
+        <main class="page">
+            <!-- ─── Overview ─── -->
+            <section class="section" id="overview">
+                <div class="page-intro">
+                    <h1 class="page-title">Dashboard</h1>
+                    <p>Real-time monitoring and account control for this GoFlix instance. Figures refresh every two
+                        seconds while live polling is on.</p>
+                </div>
+
+                <div class="kpi-deck">
+                    <article class="kpi kpi-accent">
+                        <div class="kpi-top">
+                            <span class="kpi-ico"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M10 8.5l6 3.5-6 3.5v-7z"/></svg></span>
+                            <span class="kpi-label">Active streams</span>
+                        </div>
+                        <div class="kpi-value" id="kpi-streams">–</div>
+                        <div class="kpi-note" id="kpi-streams-note">Waiting for data</div>
+                    </article>
+
+                    <article class="kpi kpi-info">
+                        <div class="kpi-top">
+                            <span class="kpi-ico"><svg viewBox="0 0 24 24"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg></span>
+                            <span class="kpi-label">Server bandwidth</span>
+                        </div>
+                        <div class="kpi-value" id="kpi-bandwidth">–</div>
+                        <div class="kpi-note" id="kpi-bandwidth-note">Waiting for data</div>
+                    </article>
+
+                    <article class="kpi kpi-ok">
+                        <div class="kpi-top">
+                            <span class="kpi-ico"><svg viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></span>
+                            <span class="kpi-label">Accounts</span>
+                        </div>
+                        <div class="kpi-value" id="kpi-accounts">–</div>
+                        <div class="kpi-note" id="kpi-accounts-note">Waiting for data</div>
+                    </article>
+
+                    <article class="kpi">
+                        <div class="kpi-top">
+                            <span class="kpi-ico"><svg viewBox="0 0 24 24"><rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg></span>
+                            <span class="kpi-label">Signed-in sessions</span>
+                        </div>
+                        <div class="kpi-value" id="kpi-sessions">–</div>
+                        <div class="kpi-note" id="kpi-sessions-note">Waiting for data</div>
+                    </article>
+                </div>
+            </section>
+
+            <!-- ─── Streaming ─── -->
+            <section class="section" id="streams">
+                <div class="section-head">
+                    <div>
+                        <h2>
+                            <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M10 8.5l6 3.5-6 3.5v-7z"/></svg>
+                            Streaming
+                        </h2>
+                        <div class="section-sub">Every active proxy session, grouped by viewer address.</div>
+                    </div>
+                    <div class="section-tools">
+                        <label class="search-field">
+                            <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                            <input type="search" class="field" id="stream-search" placeholder="Filter IP or title…"
+                                aria-label="Filter streams" autocomplete="off" spellcheck="false">
+                        </label>
+                        <div class="segmented" role="group" aria-label="Filter by status" id="stream-filter">
+                            <button type="button" data-filter="all" aria-pressed="true">All</button>
+                            <button type="button" data-filter="live" aria-pressed="false">Streaming</button>
+                            <button type="button" data-filter="paused" aria-pressed="false">Paused</button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-head">
+                        <h3>
+                            <svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+                            Sessions
+                        </h3>
+                        <div class="card-tools">
+                            <span class="pill" id="streams-pill">–</span>
+                        </div>
+                    </div>
+                    <div class="card-body flush">
+                        <div class="table-scroll">
+                            <table class="data">
+                                <thead>
+                                    <tr>
+                                        <th>Viewer</th>
+                                        <th>Title</th>
+                                        <th>Quality</th>
+                                        <th>Started</th>
+                                        <th class="num">Data served</th>
+                                        <th class="num">Throughput</th>
+                                        <th>Status</th>
+                                        <th class="act">Controls</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="streams-body"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                    <div class="blocked-strip" id="blocked-strip"></div>
+                </div>
+            </section>
+
+            <!-- ─── Bandwidth ─── -->
+            <section class="section" id="bandwidth">
+                <div class="section-head">
+                    <div>
+                        <h2>
+                            <svg viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="M7 14l4-4 3 3 5-6"/></svg>
+                            Bandwidth
+                        </h2>
+                        <div class="section-sub">Rolling 30-minute history in five-second buckets.</div>
+                    </div>
+                </div>
+
+                <div class="chart-row">
+                    <div class="card">
+                        <div class="card-head">
+                            <h3>
+                                <svg viewBox="0 0 24 24"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+                                Server throughput
+                            </h3>
+                            <div class="chart-metric">
+                                <span class="metric-now" id="overall-now">–</span>
+                                <span class="metric-cap">now</span>
+                            </div>
+                        </div>
+                        <div class="card-body">
+                            <div class="chart-stage" id="stage-overall">
+                                <canvas id="chart-overall"></canvas>
+                                <div class="chart-tip" id="tip-overall"></div>
+                            </div>
+                        </div>
+                        <div class="card-foot" id="overall-foot"></div>
+                    </div>
+
+                    <div class="card">
+                        <div class="card-head">
+                            <h3>
+                                <svg viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="M7 14l4-4 3 3 5-6"/></svg>
+                                Per viewer
+                            </h3>
+                            <div class="card-tools">
+                                <select class="field" id="ip-select" aria-label="Highlight a viewer address">
+                                    <option value="">All addresses</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="card-body">
+                            <div class="chart-stage" id="stage-perip">
+                                <canvas id="chart-perip"></canvas>
+                                <div class="chart-tip" id="tip-perip"></div>
+                            </div>
+                            <div class="chart-legend" id="perip-legend"></div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ─── Accounts ─── -->
+            <section class="section" id="accounts">
+                <div class="section-head">
+                    <div>
+                        <h2>
+                            <svg viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+                            Accounts
+                        </h2>
+                        <div class="section-sub">Registered users, their live sessions and admin controls.</div>
+                    </div>
+                    <div class="section-tools">
+                        <label class="search-field">
+                            <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                            <input type="search" class="field" id="user-search" placeholder="Find a user…"
+                                aria-label="Filter accounts" autocomplete="off" spellcheck="false">
+                        </label>
+                        <button type="button" class="btn" id="users-refresh">
+                            <svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><polyline points="21 3 21 9 15 9"/></svg>
+                            Reload
+                        </button>
+                    </div>
+                </div>
+
+                <div class="split">
+                    <div class="card">
+                        <div class="card-head">
+                            <h3>
+                                <svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+                                Directory
+                            </h3>
+                            <span class="pill" id="accounts-pill">–</span>
+                        </div>
+                        <div class="card-body flush">
+                            <div class="table-scroll">
+                                <table class="data">
+                                    <thead>
+                                        <tr>
+                                            <th>User</th>
+                                            <th>Email</th>
+                                            <th>Joined</th>
+                                            <th class="num">Sessions</th>
+                                            <th class="act">Controls</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="users-body"></tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="card">
+                        <div class="card-head">
+                            <h3>
+                                <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 16v-4M12 8h.01"/></svg>
+                                Operator notes
+                            </h3>
+                        </div>
+                        <div class="card-body">
+                            <div class="note-list">
+                                <div class="note">
+                                    <svg viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                                    <div><strong>Account controls</strong>Force sign-out when a device is lost or a
+                                        session needs resetting. Deleting an account also removes its synced viewing
+                                        data.</div>
+                                </div>
+                                <div class="note">
+                                    <svg viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                                    <div><strong>IP blocks persist</strong>Blocked addresses are stored on disk and
+                                        survive restarts. Unblock from the chips under the stream table.</div>
+                                </div>
+                                <div class="note">
+                                    <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 1.8"/></svg>
+                                    <div><strong>Idle is not gone</strong>A stream reads Idle once its player stops
+                                        polling (~30s) and disappears after two minutes of silence. Paused streams stay
+                                        listed until resumed or stopped.</div>
+                                </div>
+                                <div class="note">
+                                    <svg viewBox="0 0 24 24"><path d="M3 21v-2a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v2"/><circle cx="9" cy="7" r="3"/><path d="M21 21v-2a4 4 0 0 0-3-3.87"/></svg>
+                                    <div><strong>Household grouping</strong>Devices sharing one address collapse into a
+                                        single row; expand it to control each stream individually.</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ─── System ─── -->
+            <section class="section" id="system">
+                <div class="section-head">
+                    <div>
+                        <h2>
+                            <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="6" rx="2"/><rect x="3" y="14" width="18" height="6" rx="2"/><path d="M7 7h.01M7 17h.01"/></svg>
+                            System
+                        </h2>
+                        <div class="section-sub">Instance health, catalog size and resolution-cache effectiveness.</div>
+                    </div>
+                </div>
+
+                <div class="split">
+                    <div class="card">
+                        <div class="card-head">
+                            <h3>
+                                <svg viewBox="0 0 24 24"><path d="M12 2v4M12 18v4M4.9 4.9l2.9 2.9M16.2 16.2l2.9 2.9M2 12h4M18 12h4M4.9 19.1l2.9-2.9M16.2 7.8l2.9-2.9"/></svg>
+                                Resolution cache
+                            </h3>
+                            <span class="pill" id="cache-hitrate">–</span>
+                        </div>
+                        <div class="card-body">
+                            <div class="stat-grid" id="cache-grid"></div>
+                        </div>
+                    </div>
+
+                    <div class="card">
+                        <div class="card-head">
+                            <h3>
+                                <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 1.8"/></svg>
+                                Instance
+                            </h3>
+                        </div>
+                        <div class="card-body">
+                            <div class="stat-grid" id="instance-grid"></div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <!-- Toasts -->
+    <div class="toast-stack" id="toast-stack" role="status" aria-live="polite" aria-atomic="false"></div>
+
+    <!-- Confirm dialog -->
+    <div class="modal-veil" id="confirm-veil" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
+        <div class="modal">
+            <div class="modal-body">
+                <span class="modal-ico">
+                    <svg viewBox="0 0 24 24"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                </span>
+                <div>
+                    <h3 id="confirm-title">Are you sure?</h3>
+                    <p id="confirm-text"></p>
+                </div>
+            </div>
+            <div class="modal-foot">
+                <button type="button" class="btn" id="confirm-cancel">Cancel</button>
+                <button type="button" class="btn btn-danger" id="confirm-ok">Confirm</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/js/dashboard.js"></script>
+</body>
+
+</html>
