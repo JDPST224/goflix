@@ -132,19 +132,23 @@ func (r *Resolver) Resolve(ctx context.Context, mediaType, tmdbID, season, episo
 
 	var lastErr error
 	for pass := 0; pass < 2; pass++ {
-		for _, srv := range servers {
+		for start := 0; start < len(servers); start += serverParallelism {
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
 			}
-			res, err := r.attemptServer(ctx, origin, ua, mediaType, tmdbID, season, episode, pagePath, srv)
+			end := start + serverParallelism
+			if end > len(servers) {
+				end = len(servers)
+			}
+			res, err := r.attemptServersParallel(ctx, origin, ua, mediaType, tmdbID, season, episode, pagePath, servers[start:end])
+			if res != nil {
+				r.logf("phase total: %d ms", time.Since(t0).Milliseconds())
+				r.logf("cinesrcjs resolved directly server=%q source=%s", res.Provider, redact(res.Source))
+				return res, nil
+			}
 			if err != nil {
 				lastErr = err
-				r.logf("cinesrcjs server %q unusable: %v", srv, err)
-				continue
 			}
-			r.logf("phase total: %d ms", time.Since(t0).Milliseconds())
-			r.logf("cinesrcjs resolved directly server=%q source=%s", res.Provider, redact(res.Source))
-			return res, nil
 		}
 		if lastErr == nil {
 			break
@@ -319,6 +323,59 @@ func (r *Resolver) attemptServer(ctx context.Context, origin, ua, mediaType, tmd
 		result.Provider = srv
 	}
 	return result, nil
+}
+
+// serverParallelism is how many source-server challenge sessions run at
+// once inside one Resolve. Sequential attempts cost a full session (~4s)
+// per unusable server before reaching the one that has the stream; two in
+// parallel halve the typical wall time (nebula frequently has no stream,
+// so lisbon's success hides nebula's failure). Four concurrent runtimes
+// per resolve is still a modest load on the upstream.
+const serverParallelism = 2
+
+// attemptServersParallel runs one full challenge session per server in the
+// batch concurrently. The first success wins and cancels its siblings
+// mid-flight (their remaining PoW/network work is aborted); the failure of
+// the earliest-ranked server is returned for the asset-refresh heuristic.
+func (r *Resolver) attemptServersParallel(ctx context.Context, origin, ua, mediaType, tmdbID, season, episode, pagePath string, servers []string) (*Result, error) {
+	type outcome struct {
+		res *Result
+		err error
+	}
+	results := make([]outcome, len(servers))
+	// batchCtx is cancelled as soon as any server resolves so the sibling
+	// attempt stops burning bandwidth on a challenge that no longer matters.
+	batchCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var wg sync.WaitGroup
+	for i, srv := range servers {
+		wg.Add(1)
+		go func(i int, srv string) {
+			defer wg.Done()
+			res, err := r.attemptServer(batchCtx, origin, ua, mediaType, tmdbID, season, episode, pagePath, srv)
+			results[i] = outcome{res: res, err: err}
+			if res != nil {
+				cancel() // idempotent; a second late success is harmless
+			}
+		}(i, srv)
+	}
+	wg.Wait()
+
+	var firstErr error
+	for i, srv := range servers {
+		if results[i].res != nil {
+			// Earlier-ranked server won the race even if a later one
+			// resolved first.
+			return results[i].res, nil
+		}
+		if results[i].err != nil {
+			r.logf("cinesrcjs server %q unusable: %v", srv, results[i].err)
+			if firstErr == nil {
+				firstErr = results[i].err
+			}
+		}
+	}
+	return nil, firstErr
 }
 
 // providerList fetches the embed's ranked source-server list (15 entries) so

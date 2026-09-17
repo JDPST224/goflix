@@ -177,7 +177,13 @@ type cinesrcDirectResult struct {
 // tryCinesrcDirect resolves cinesrc, registers the proxy session, and primes
 // the body cache. It returns false if resolution fails so Resolve can fall back.
 func (r *Resolver) tryCinesrcDirect(parent context.Context, req MediaRequest) (string, bool) {
-	ctx, cancel := context.WithTimeout(parent, 25*time.Second)
+	// The embedded engine's cold start (asset scan) plus one full challenge
+	// session per server can approach 30s before the master-playlist
+	// validation fetch runs. A 25s budget left that fetch no time at all and
+	// discarded an already-resolved playlist, forcing the much slower browser
+	// fallback to redo the whole chain. The engine still caps itself at its
+	// own 45s default, so the browser-worker fallback keeps a slice of this.
+	ctx, cancel := context.WithTimeout(parent, 60*time.Second)
 	defer cancel()
 
 	cr, err := r.resolveCinesrcDirect(ctx, req)
@@ -272,7 +278,7 @@ func (r *Resolver) resolveCinesrcProgrammatic(ctx context.Context, req MediaRequ
 	evalScript := fmt.Sprintf(`
 		(async () => {
 			let d6 = null;
-			for (let i = 0; i < 400; i++) {
+			for (let i = 0; i < 1200; i++) {
 				d6 = window.__captured_d6;
 				if (d6?.gc && d6?.dr && window.__ss2_challenge?.gc) break;
 				await new Promise(r => setTimeout(r, 10));

@@ -64,7 +64,7 @@ func (r *Resolver) startWarmup(token string) {
 // through the body cache so the player's first manifest requests are served
 // from memory, then leaves the segment read-ahead running.
 func (r *Resolver) warmManifestChain(ctx context.Context, s *proxySession) {
-	text, base, ok := r.warmPlaylist(ctx, s, s.source, maxManifestBytes)
+	text, base, ok := r.warmPlaylistRetry(ctx, s, s.source)
 	if !ok || ctx.Err() != nil {
 		return
 	}
@@ -81,9 +81,27 @@ func (r *Resolver) warmManifestChain(ctx context.Context, s *proxySession) {
 	if variantURL == "" {
 		return
 	}
-	vtext, vbase, ok := r.warmPlaylist(ctx, s, variantURL, maxManifestBytes)
+	vtext, vbase, ok := r.warmPlaylistRetry(ctx, s, variantURL)
 	if ok && strings.Contains(vtext, "#EXTINF") {
 		r.registerSegments(s, vbase, vtext)
+	}
+}
+
+// warmPlaylistRetry fetches one playlist through the body cache with a few
+// retries: a failed warm leaves the player's manifest request exposed to a
+// live upstream fetch during the busiest startup window (4K segments
+// streaming), where provider edges truncate slow playlist responses.
+func (r *Resolver) warmPlaylistRetry(ctx context.Context, s *proxySession, raw string) (string, *url.URL, bool) {
+	for attempt := 0; ; attempt++ {
+		text, base, ok := r.warmPlaylist(ctx, s, raw, maxManifestBytes)
+		if ok || attempt >= 2 || ctx.Err() != nil {
+			return text, base, ok
+		}
+		select {
+		case <-ctx.Done():
+			return "", nil, false
+		case <-time.After(time.Duration(attempt+1) * 1500 * time.Millisecond):
+		}
 	}
 }
 

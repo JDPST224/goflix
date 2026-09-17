@@ -25,6 +25,30 @@ import (
 // different) host and typically succeeds immediately.
 const upstreamAttempts = 3
 
+// mediaHostHeaderConcurrency caps simultaneous upstream header-phases
+// (connection + request + response headers) per hostname for media fetches.
+// The CDN's rate limiter counts request rate: the read-ahead's parallel
+// prefetches and the player's live requests must not pile up into a 429
+// storm. Body reads happen outside the limiter, so a slow segment download
+// never blocks other requests from starting.
+const mediaHostHeaderConcurrency = 6
+
+// limitMediaHost acquires one header-phase slot for the host, bounded by
+// ctx. The returned release func must be called once response headers are
+// in hand (or the attempt failed).
+func (r *Resolver) limitMediaHeaders(ctx context.Context, host string) (func(), error) {
+	host = strings.ToLower(host)
+	v, _ := r.hostSem.LoadOrStore(host, make(chan struct{}, mediaHostHeaderConcurrency))
+	sem := v.(chan struct{})
+	select {
+	case sem <- struct{}{}:
+		return func() { <-sem }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// retryableUpstreamStatus lists transient statuses worth re-requesting.
 func retryableUpstreamStatus(code int) bool {
 	switch code {
 	case http.StatusRequestTimeout, http.StatusTooManyRequests,
@@ -68,9 +92,46 @@ func doWithRetry(ctx context.Context, logPrefix string, attempt func() (*http.Re
 				return nil, ctx.Err()
 			}
 			return nil, err
-		case <-time.After(time.Duration(n) * 400 * time.Millisecond):
+		case <-time.After(retryDelay(n, resp)):
 		}
 	}
+}
+
+// retryDelay computes the wait before the next attempt. Rate-limited
+// responses (429) need far more than the base 400ms cadence — retrying that
+// fast just burns attempts against a limit that is still engaged — so they
+// wait longer, preferring the upstream's Retry-After when present.
+func retryDelay(attempt int, resp *http.Response) time.Duration {
+	base := time.Duration(attempt) * 400 * time.Millisecond
+	if resp == nil || resp.StatusCode != http.StatusTooManyRequests {
+		return base
+	}
+	delay := time.Duration(attempt) * 2 * time.Second
+	if ra := parseRetryAfter(resp.Header.Get("Retry-After"), time.Now()); ra > delay {
+		delay = ra
+	}
+	if delay > 15*time.Second {
+		delay = 15 * time.Second
+	}
+	return delay
+}
+
+// parseRetryAfter parses a Retry-After header (seconds or HTTP-date); a
+// missing or malformed header yields zero.
+func parseRetryAfter(v string, now time.Time) time.Duration {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return 0
+	}
+	if n, err := strconv.Atoi(v); err == nil && n > 0 {
+		return time.Duration(n) * time.Second
+	}
+	if t, err := http.ParseTime(v); err == nil {
+		if d := t.Sub(now); d > 0 {
+			return d
+		}
+	}
+	return 0
 }
 
 func errStringOrStatus(err error, resp *http.Response) string {

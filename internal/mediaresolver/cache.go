@@ -56,6 +56,21 @@ func (c *bodyCache) get(key string) (*cacheEntry, bool) {
 	return e, true
 }
 
+// getStale returns an entry regardless of its expiry, without removing or
+// refreshing it. Last-resort fallback for playlist refetches that fail
+// upstream: replaying a stale VOD playlist beats killing the stream.
+func (c *bodyCache) getStale(key string) (*cacheEntry, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	el, ok := c.items[key]
+	if !ok {
+		return nil, false
+	}
+	e := el.Value.(*cacheEntry)
+	c.order.MoveToFront(el)
+	return e, true
+}
+
 // put stores a body, evicting least-recently-used entries to stay within the
 // byte budget. Oversized bodies are refused rather than allowed to thrash the
 // whole cache.
@@ -180,9 +195,16 @@ func (r *Resolver) doFetchForCache(ctx context.Context, s *proxySession, rawURL 
 	if req.Header.Get("Range") == "" && !strings.Contains(strings.ToLower(u.Path), ".m3u8") {
 		req.Header.Set("Range", "bytes=0-")
 	}
-	req.Header.Set("Accept-Encoding", "identity")
+	// Playlists request gzip (decoded below, cached decoded): uncompressed
+	// multi-megabyte 4K playlists stay exposed to provider-edge truncation
+	// for the whole slow download. Segments keep identity.
+	if strings.Contains(strings.ToLower(u.Path), ".m3u8") {
+		req.Header.Set("Accept-Encoding", "gzip")
+	} else {
+		req.Header.Set("Accept-Encoding", "identity")
+	}
 	client := &http.Client{
-		Transport: r.transport,
+		Transport: r.mediaTransport(),
 		CheckRedirect: func(next *http.Request, via []*http.Request) error {
 			if next.URL == nil || (next.URL.Scheme != "https" && next.URL.Scheme != "http") {
 				return errors.New("redirect to invalid URL")
@@ -193,6 +215,13 @@ func (r *Resolver) doFetchForCache(ctx context.Context, s *proxySession, rawURL 
 			return nil
 		},
 	}
+	// Rate-limit the header phase per host (shared with the proxy's live
+	// path) so read-ahead prefetches cannot pile up into a 429 storm.
+	release, lerr := r.limitMediaHeaders(ctx, u.Hostname())
+	if lerr != nil {
+		return nil, lerr
+	}
+	defer release()
 	resp, err := doWithRetry(ctx, "Cache", func() (*http.Response, error) {
 		return client.Do(req.Clone(ctx))
 	})
@@ -230,27 +259,40 @@ func (r *Resolver) doFetchForCache(ctx context.Context, s *proxySession, rawURL 
 	r.mu.Unlock()
 	result := &cachedFetch{data: data, contentType: resp.Header.Get("Content-Type"), status: resp.StatusCode}
 	if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusPartialContent {
-		ttl := cacheEntryTTL
 		if strings.Contains(string(data), "#EXTM3U") {
-			// Playlists default to a short TTL so live-style refreshes
-			// still reach upstream. A VOD playlist (marked complete by
-			// EXT-X-ENDLIST) is immutable — some providers even hand out
-			// single-use playlist tokens, where any refetch stalls — so
-			// VOD playlists cache for the full entry lifetime.
-			ttl = playlistCacheTTL
-			if strings.Contains(string(data), "#EXT-X-ENDLIST") {
-				ttl = cacheEntryTTL
-			}
+			ttl := playlistTTL(string(data))
+			r.cache.put(&cacheEntry{
+				key:         rawURL,
+				data:        data,
+				status:      resp.StatusCode,
+				contentType: resp.Header.Get("Content-Type"),
+				expiresAt:   time.Now().Add(ttl),
+			})
 		}
-		r.cache.put(&cacheEntry{
-			key:         rawURL,
-			data:        data,
-			status:      resp.StatusCode,
-			contentType: resp.Header.Get("Content-Type"),
-			expiresAt:   time.Now().Add(ttl),
-		})
 	}
 	return result, nil
+}
+
+// playlistTTL decides how long a fetched playlist stays cached. Providers
+// that declare a complete playlist (EXT-X-ENDLIST or PLAYLIST-TYPE:VOD) get
+// the full entry lifetime — such playlists are immutable, and some even
+// hand out single-use playlist tokens where any refetch stalls. A declared
+// EVENT playlist is live-style and keeps the short TTL so refreshes still
+// reach upstream. Unmarked playlists default to a moderate TTL: every
+// provider this resolver serves is VOD, and the player re-requests media
+// playlists every target duration (~6-10s) — a 5s TTL made almost every
+// reload an upstream round trip, where oversized 4K movie playlists
+// routinely die mid-read (HTTP/2 STREAM_CLOSED) and blow past the player's
+// 10s load timeout.
+func playlistTTL(text string) time.Duration {
+	if strings.Contains(text, "#EXT-X-ENDLIST") ||
+		strings.Contains(text, "#EXT-X-PLAYLIST-TYPE:VOD") {
+		return cacheEntryTTL
+	}
+	if strings.Contains(text, "#EXT-X-PLAYLIST-TYPE:EVENT") {
+		return playlistCacheTTL
+	}
+	return mediaPlaylistTTL
 }
 
 // registerSegments feeds a media playlist's ordered segment list into the

@@ -90,12 +90,25 @@ func (r *Resolver) Proxy(w http.ResponseWriter, req *http.Request, token string)
 	}
 	// Join in-flight downloads: if the read-ahead warmer (or another player
 	// request) is fetching this exact URL right now, waiting for it beats
-	// downloading the same bytes twice over a shared connection. Only
-	// non-manifest URLs join here — playlists are tiny and re-fetched freely.
-	if !strings.HasSuffix(strings.ToLower(u.Path), ".m3u8") && req.Method == http.MethodGet && req.Header.Get("Range") == "" {
+	// downloading the same bytes twice over a shared connection. Playlists
+	// join too: the warmer's variant download is typically well underway by
+	// the time the player asks, so joining skips a duplicate upstream
+	// transfer on a second connection — and the extra STREAM_CLOSED exposure
+	// that connection carries.
+	if req.Method == http.MethodGet && req.Header.Get("Range") == "" {
 		if v, ok := r.inflight.Load(u.String()); ok {
 			joiner := v.(*inflightFetch)
-			timer := time.NewTimer(inflightJoinWait)
+			// Playlists wait longer: multi-megabyte VOD playlists take
+			// several seconds upstream, and joining the warmer's download
+			// beats duplicating it on a second connection (which doubles
+			// the mid-read STREAM_CLOSED exposure). Segments keep the
+			// short wait so a stalled prefetch never delays a player
+			// request that could fetch independently.
+			joinWait := inflightJoinWait
+			if strings.HasSuffix(strings.ToLower(u.Path), ".m3u8") {
+				joinWait = inflightPlaylistJoinWait
+			}
+			timer := time.NewTimer(joinWait)
 			defer timer.Stop()
 			select {
 			case <-joiner.done:
@@ -118,7 +131,7 @@ func (r *Resolver) Proxy(w http.ResponseWriter, req *http.Request, token string)
 	// ResponseHeaderTimeout and the copy by the request context (client
 	// disconnect) — the same contract a reverse proxy relies on.
 	client := &http.Client{
-		Transport: r.transport,
+		Transport: r.mediaTransport(),
 		CheckRedirect: func(next *http.Request, via []*http.Request) error {
 			nu := next.URL
 			if nu == nil || (nu.Scheme != "https" && nu.Scheme != "http") || nu.Host == "" {
@@ -165,16 +178,50 @@ func (r *Resolver) Proxy(w http.ResponseWriter, req *http.Request, token string)
 			upstream.Header.Set(k, v)
 		}
 	}
-	upstream.Header.Set("Accept-Encoding", "identity")
-	resp, err := doWithRetry(req.Context(), "Proxy", func() (*http.Response, error) {
-		// Clone per attempt: client.Do mutates the request (redirect hops,
-		// header overrides) so a reused request would leak state across tries.
-		return client.Do(upstream.Clone(req.Context()))
-	})
+	// Accept-Encoding: segments keep identity (Range requests and binary
+	// bodies gain nothing); playlists request gzip — provider edges
+	// otherwise ship multi-megabyte 4K playlists raw, and the seconds-long
+	// uncompressed download is exactly the window in which their edge
+	// truncates slow responses (STREAM_CLOSED / unexpected EOF).
+	if strings.HasSuffix(strings.ToLower(u.Path), ".m3u8") {
+		upstream.Header.Set("Accept-Encoding", "gzip")
+	} else {
+		upstream.Header.Set("Accept-Encoding", "identity")
+	}
+	// fetchOnce performs one upstream fetch (with transport-level retries
+	// via doWithRetry) and sniffs the response head for manifest detection.
+	// It never writes to the player, so it is safe to call again after a
+	// failed attempt.
+	fetchOnce := func() (*http.Response, []byte, error) {
+		// Rate-limit the header phase per host: the CDN counts request
+		// rate, and prefetch bursts + player requests hitting it at once
+		// answer 429. Released as soon as headers are in hand, so the body
+		// download never blocks other requests from starting.
+		release, lerr := r.limitMediaHeaders(req.Context(), u.Hostname())
+		if lerr != nil {
+			return nil, nil, lerr
+		}
+		defer release()
+		resp, err := doWithRetry(req.Context(), "Proxy", func() (*http.Response, error) {
+			// Clone per attempt: client.Do mutates the request (redirect hops,
+			// header overrides) so a reused request would leak state across tries.
+			return client.Do(upstream.Clone(req.Context()))
+		})
+		if err != nil {
+			return nil, nil, err
+		}
+		var head []byte
+		if resp.StatusCode == http.StatusOK && req.Method != http.MethodHead {
+			buf := make([]byte, 512)
+			n, _ := io.ReadFull(resp.Body, buf)
+			head = buf[:n]
+		}
+		return resp, head, nil
+	}
+	resp, head, err := fetchOnce()
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
 	// Player-priority accounting: from here until the response has been fully
 	// forwarded, this request is consuming live upstream bandwidth. The
 	// read-ahead pump sees the counter and pauses new prefetch work.
@@ -208,18 +255,29 @@ func (r *Resolver) Proxy(w http.ResponseWriter, req *http.Request, token string)
 	// leaves its URIs unrewritten (hls.js then resolves them against the
 	// proxy URL and playback fails). Byte ranges (206) are skipped so a range
 	// starting inside playlist text can't be misclassified as a manifest.
-	var head []byte
-	if resp.StatusCode == http.StatusOK && req.Method != http.MethodHead {
-		buf := make([]byte, 512)
-		n, _ := io.ReadFull(resp.Body, buf)
-		head = buf[:n]
+	// (The sniff runs inside fetchOnce; head holds those first bytes.)
+
+	// readManifestBody reads the (optionally gzip-encoded) playlist body.
+	readManifest := func(resp *http.Response, head []byte) ([]byte, error) {
+		reader := io.Reader(io.MultiReader(bytes.NewReader(head), resp.Body))
+		if strings.EqualFold(strings.TrimSpace(resp.Header.Get("Content-Encoding")), "gzip") {
+			gz, gzErr := gzip.NewReader(reader)
+			if gzErr != nil {
+				return nil, fmt.Errorf("upstream returned an invalid gzip manifest: %w", gzErr)
+			}
+			defer gz.Close()
+			reader = gz
+		}
+		return io.ReadAll(io.LimitReader(reader, maxManifestBytes+1))
 	}
+
 	bodyReader := io.MultiReader(bytes.NewReader(head), resp.Body)
 
 	isManifest := strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "mpegurl") ||
 		strings.HasSuffix(strings.ToLower(u.Path), ".m3u8") ||
 		(len(head) > 0 && strings.HasPrefix(strings.TrimSpace(string(head)), "#EXTM3U"))
 	if !isManifest {
+		defer resp.Body.Close()
 		// Segments are immutable — let the browser/player cache them instead
 		// of re-downloading on every replay or seek-back.
 		w.Header().Set("Cache-Control", "private, max-age=21600")
@@ -258,25 +316,53 @@ func (r *Resolver) Proxy(w http.ResponseWriter, req *http.Request, token string)
 		}
 		return nil
 	}
-	reader := bodyReader
-	if strings.EqualFold(strings.TrimSpace(resp.Header.Get("Content-Encoding")), "gzip") {
-		// bodyReader includes the sniffed head bytes; create the gzip reader
-		// from it, not from resp.Body which has already had those bytes consumed.
-		gz, gzErr := gzip.NewReader(bodyReader)
-		if gzErr != nil {
-			return fmt.Errorf("upstream returned an invalid gzip manifest: %w", gzErr)
+	// Manifest bodies are read fully before anything is forwarded to the
+	// player and HLS GETs are idempotent, so when the body dies mid-read
+	// (HTTP/2 "STREAM_CLOSED; received from peer", unexpected EOF from the
+	// h1 path) re-fetching the whole playlist is invisible to the player and
+	// beats a 502 that forces a player-side retry of the manifest.
+	// manifestFetchAttempts exceeds upstreamAttempts because the oversized
+	// 4K playlists some providers hand out die mid-read on a large fraction
+	// of attempts; with a warm cache after the first success the refetch
+	// traffic is low and retries are cheap.
+	defer resp.Body.Close() // first attempt's body; double-close after retries is a no-op
+	data, err := readManifest(resp, head)
+	for attempt := 1; err != nil && attempt < manifestFetchAttempts && req.Context().Err() == nil; attempt++ {
+		log.Printf("[MediaResolver] proxy manifest read attempt %d/%d failed (%v), retrying", attempt, manifestFetchAttempts, err)
+		resp.Body.Close()
+		resp, head, err = fetchOnce()
+		if err != nil {
+			return err
 		}
-		defer gz.Close()
-		reader = gz
+		// Re-apply the forwarded headers: a retry may carry a different
+		// Content-Type/Length than the failed attempt.
+		for _, k := range []string{"Content-Type", "Content-Length", "Content-Range", "Accept-Ranges", "ETag", "Last-Modified"} {
+			if v := resp.Header.Get(k); v != "" {
+				w.Header().Set(k, v)
+			}
+		}
+		data, err = readManifest(resp, head)
 	}
-	data, err := io.ReadAll(io.LimitReader(reader, maxManifestBytes+1))
 	if err != nil {
+		resp.Body.Close() // body of the last failed attempt (the defer only covers the first)
+		log.Printf("[MediaResolver] proxy manifest fetch failed (%v); serving a stale cached copy if present", err)
+		if e, ok := r.cache.getStale(u.String()); ok {
+			r.serveFromCache(w, req, s, token, u, e)
+			return nil
+		}
 		return err
 	}
+	resp.Body.Close() // final body: fully read, return the connection to the pool
 	if len(data) > maxManifestBytes {
 		return errors.New("upstream HLS manifest exceeds size limit")
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		// An upstream error page for a playlist we've served before: the
+		// stale copy beats forwarding the failure to the player.
+		if e, ok := r.cache.getStale(u.String()); ok {
+			r.serveFromCache(w, req, s, token, u, e)
+			return nil
+		}
 		w.Header().Del("Content-Length")
 		w.WriteHeader(resp.StatusCode)
 		_, _ = w.Write(data)
@@ -293,10 +379,26 @@ func (r *Resolver) Proxy(w http.ResponseWriter, req *http.Request, token string)
 	text := string(data)
 	if !strings.HasPrefix(strings.TrimSpace(text), "#EXTM3U") {
 		// Upstream served an HTML/JSON error page for a .m3u8 URL. Forwarding
-		// it would make the player fail with fragParsingError, so reject it.
+		// it would make the player fail with fragParsingError, so reject it —
+		// replaying a previously cached playlist instead when one exists.
 		log.Printf("[MediaResolver] upstream returned a non-HLS payload for a manifest URL host=%s path=%s content_encoding=%q bytes=%d", strings.ToLower(u.Host), u.Path, resp.Header.Get("Content-Encoding"), len(data))
+		if e, ok := r.cache.getStale(u.String()); ok {
+			r.serveFromCache(w, req, s, token, u, e)
+			return nil
+		}
 		return errors.New("upstream returned a non-HLS payload for a manifest URL")
 	}
+	// Admit the upstream playlist into the body cache. The player re-fetches
+	// media playlists every target duration, and every refetch is another
+	// upstream round trip exposed to mid-read STREAM_CLOSED resets — caching
+	// collapses them. TTL mirrors doFetchForCache (see playlistTTL).
+	r.cache.put(&cacheEntry{
+		key:         u.String(),
+		data:        data,
+		status:      resp.StatusCode,
+		contentType: resp.Header.Get("Content-Type"),
+		expiresAt:   time.Now().Add(playlistTTL(text)),
+	})
 	// Capture the top variant height for the dashboard when the read-ahead
 	// never saw the master playlist.
 	r.noteStreamHeight(s, text)

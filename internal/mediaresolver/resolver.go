@@ -125,6 +125,12 @@ const (
 	// playlistCacheTTL keeps cached manifests fresh enough that live-style
 	// playlist refreshes still reach upstream.
 	playlistCacheTTL = 5 * time.Second
+	// mediaPlaylistTTL is the fallback TTL for media playlists that declare
+	// no live/VOD markers. The resolver's providers are VOD-only, so these
+	// playlists are immutable in practice; the TTL bounds worst-case
+	// staleness while collapsing the player's ~6-10s reload cadence into at
+	// most one upstream fetch per minute.
+	mediaPlaylistTTL = 60 * time.Second
 	// prefetchLookahead is how many segments ahead of the furthest segment
 	// handed to the player the read-ahead keeps downloaded. Twenty-four
 	// segments gives the pump enough candidate targets to keep five-plus
@@ -142,7 +148,11 @@ const (
 	// downloads instead of six, and full parallelism resumes the moment the
 	// last live fetch drains.
 	prefetchMaxInflight     = 6
-	prefetchInitialInflight = 10
+	// prefetchInitialInflight is the parallelism while the initial window is
+	// still filling. Was 10: bursts of ten simultaneous segment requests
+	// tripped provider-CDN request-rate limits (429 storms on
+	// info.movieboxnoob.cc) that burned out every prefetch and retry.
+	prefetchInitialInflight = 4
 	// prefetchFailureBackoff waits before re-attempting a segment that failed,
 	// so one bad segment cannot spin the prefetcher into a retry storm.
 	prefetchFailureBackoff = 30 * time.Second
@@ -154,6 +164,16 @@ const (
 	// A read-ahead stuck on a stalled upstream stream must not hold live
 	// playback hostage for its entire timeout window.
 	inflightJoinWait = 1500 * time.Millisecond
+	// inflightPlaylistJoinWait bounds how long a playlist request waits on
+	// an in-flight download of the same playlist. Media playlists are
+	// immutable here and can run multi-megabyte, so joining the warmer's
+	// copy beats a duplicate download on a second connection.
+	inflightPlaylistJoinWait = 8 * time.Second
+	// manifestFetchAttempts bounds whole-body retries for proxy playlist
+	// fetches. Provider edges truncate oversized 4K playlists mid-read on a
+	// large fraction of attempts; once one attempt succeeds the playlist is
+	// cached and refetches stop, so aggressive retries are cheap.
+	manifestFetchAttempts = 5
 
 	// defaultMaxSessions is the cap on concurrent proxy sessions when
 	// Config.MaxSessions is not set.
@@ -188,8 +208,20 @@ type Resolver struct {
 	stats resolutionStats
 	// transport is shared across proxy requests for connection reuse.
 	transport *http.Transport
+	// h1Transport is the media-traffic transport: HTTP/1.1 only. Some
+	// provider CDNs stall individual HTTP/2 streams while the connection
+	// stays ping-healthy, and because HTTP/2 multiplexes every request onto
+	// ONE connection per host, one stuck connection wedges every concurrent
+	// download and every retry with it. HTTP/1.1 gives each request its own
+	// connection (pooled), matching the way these CDNs reward parallel
+	// connections rather than multiplexed streams.
+	h1Transport *http.Transport
 	// blockCache memoizes per-hostname SSRF checks (hostname -> blocked).
 	blockCache sync.Map
+	// hostSem caps concurrent upstream header-phases per hostname (media
+	// fetches only). Provider CDNs rate-limit by request rate — hammering
+	// them with a dozen parallel playlist/segment requests answers 429.
+	hostSem sync.Map // hostname(lower) -> chan struct{}
 	// cache holds fully-read upstream bodies (playlists, segments) so repeat
 	// requests and read-ahead hits are served from RAM.
 	cache *bodyCache
@@ -302,6 +334,25 @@ func New(cfg Config) (*Resolver, error) {
 			HTTP2:           &http.HTTP2Config{SendPingTimeout: 10 * time.Second},
 			ReadBufferSize:  128 * 1024,
 			WriteBufferSize: 128 * 1024,
+		},
+		h1Transport: &http.Transport{
+			Proxy: http.ProxyFromEnvironment,
+			DialContext: (&net.Dialer{
+				Timeout:   5 * time.Second,
+				KeepAlive: 60 * time.Second,
+			}).DialContext,
+			MaxIdleConns:          512,
+			MaxIdleConnsPerHost:   64,
+			MaxConnsPerHost:       128,
+			IdleConnTimeout:       120 * time.Second,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ExpectContinueTimeout: 1 * time.Second,
+			// No ForceAttemptHTTP2 / no h2 NextProtos: this transport speaks
+			// HTTP/1.1 only, so a stalled CDN response can never block the
+			// other in-flight downloads — each request owns its connection.
+			ResponseHeaderTimeout: 10 * time.Second,
+			ReadBufferSize:        128 * 1024,
+			WriteBufferSize:       128 * 1024,
 		},
 	}
 	// Restore resolutions persisted by a previous run so rewatches stay
@@ -426,6 +477,17 @@ func (r *Resolver) maxSessions() int {
 		return r.cfg.MaxSessions
 	}
 	return defaultMaxSessions
+}
+
+// mediaTransport returns the HTTP/1.1 transport for bulk media traffic
+// (playlists and segments fetched by the proxy and the read-ahead warmer).
+// Resolver values built without one (some tests) fall back to the shared
+// transport.
+func (r *Resolver) mediaTransport() http.RoundTripper {
+	if r.h1Transport != nil {
+		return r.h1Transport
+	}
+	return r.transport
 }
 
 func (r *Resolver) Resolve(parent context.Context, req MediaRequest) (string, error) {
