@@ -159,11 +159,15 @@ const (
 
 // attachAndWarm is the shared tail of every session-creation site (the
 // provider direct paths and the browser fallback in Resolve): kick off the
-// server-side subtitle ladder for eligible providers, then start the
-// read-ahead warmup.
+// server-side subtitle ladder for eligible providers, start the read-ahead
+// warmup, then hold briefly while the first-play path (media playlist +
+// first segment) is primed, so the player's very first requests are served
+// from RAM instead of racing cold upstream fetches inside its readiness
+// window.
 func (r *Resolver) attachAndWarm(token string, req MediaRequest) {
 	r.maybeAttachSubRenditions(token, req)
 	r.startWarmup(token)
+	r.primePlayback(token, primePlaybackCeiling)
 }
 
 // waitForSubs blocks while a backend attachment is still in flight so the
@@ -181,7 +185,7 @@ func (r *Resolver) waitForSubs(s *proxySession) bool {
 	r.mu.Lock()
 	done := s.subsDone
 	r.mu.Unlock()
-	
+
 	const ceiling = waitForSubsInterval * waitForSubsTicks // 2.5s
 	if done == nil {
 		// Safety net: should never happen with the updated newSession.
@@ -288,7 +292,6 @@ func injectSubRenditions(text string, subs []SubRendition) string {
 func InjectSubRenditions(text string, subs []SubRendition) string {
 	return injectSubRenditions(text, subs)
 }
-
 
 // synthMediaMaster wraps a bare media playlist in a synthesized master so
 // subtitle renditions can be declared. VidKing hands out single-variant

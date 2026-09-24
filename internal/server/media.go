@@ -11,6 +11,23 @@ import (
 	"goflix/internal/mediaresolver"
 )
 
+// resolveBW returns the instant-start bandwidth hint for a freshly resolved
+// proxy session (Mbps, 0 when unknown). The token is embedded in the proxy
+// URL ("/api/media/proxy/<token>.m3u8") that Resolve returns.
+func (d *Deps) resolveBW(source, viewerIP string) float64 {
+	const marker = "/api/media/proxy/"
+	i := strings.Index(source, marker)
+	if i < 0 {
+		return 0
+	}
+	rest := source[i+len(marker):]
+	rest = strings.TrimSuffix(rest, ".m3u8")
+	if rest == "" {
+		return 0
+	}
+	return d.Resolver.SessionBandwidthHint(rest, viewerIP)
+}
+
 // makeMovieSourceHandler resolves a movie HLS source for the given provider.
 // prefix is the registered route prefix used to extract the TMDB ID — it is
 // NOT derived from the provider, because the legacy unprefixed vixsrc routes
@@ -35,7 +52,11 @@ func (d *Deps) makeMovieSourceHandler(prefix, provider string) http.HandlerFunc 
 			writeError(w, http.StatusBadGateway, "Unable to resolve media source")
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"success": true, "type": "hls", "url": source})
+		writeJSON(w, http.StatusOK, map[string]any{
+			"success": true, "type": "hls", "url": source,
+			// Measured sustainable rate for instant-start tier selection.
+			"bw": d.resolveBW(source, clientIP(r)),
+		})
 	}
 }
 
@@ -64,7 +85,10 @@ func (d *Deps) makeTVSourceHandler(prefix, provider string) http.HandlerFunc {
 			writeError(w, http.StatusBadGateway, "Unable to resolve media source")
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"success": true, "type": "hls", "url": source})
+		writeJSON(w, http.StatusOK, map[string]any{
+			"success": true, "type": "hls", "url": source,
+			"bw": d.resolveBW(source, clientIP(r)),
+		})
 	}
 }
 

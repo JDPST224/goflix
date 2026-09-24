@@ -464,10 +464,10 @@ func (r *Resolver) hotSwapSession(token string, fresh *directResolution) {
 	// Replace the read-ahead pipeline: it tracks the old playlist's
 	// segment list and cursor.
 	var oldCancel context.CancelFunc
-	if s.warmer != nil && s.warmer.cancel != nil {
-		oldCancel = s.warmer.cancel
+	if w := s.warmer.Load(); w != nil && w.cancel != nil {
+		oldCancel = w.cancel
 	}
-	s.warmer = nil
+	s.warmer.Store(nil)
 	r.mu.Unlock()
 	if oldCancel != nil {
 		oldCancel()

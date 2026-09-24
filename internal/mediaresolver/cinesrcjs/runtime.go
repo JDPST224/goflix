@@ -11,8 +11,10 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/dop251/goja"
@@ -21,10 +23,15 @@ import (
 // startEpoch anchors performance.now().
 var startEpoch = time.Now()
 
+// rtSeq assigns per-runtime debug tags so interleaved trace lines from
+// parallel sessions can be told apart.
+var rtSeq atomic.Int64
+
 // runtime bundles the goja VM with its Go-side environment: HTTP client with
 // cookie jar, WebCrypto shims, timer/event queue and Worker emulation.
 type runtime struct {
 	vm       *goja.Runtime
+	tag      string
 	client   *http.Client
 	origin   string
 	pagePath string
@@ -60,6 +67,7 @@ func newRuntime(ctx context.Context, origin, pagePath, ua string, fp Fingerprint
 	client := &http.Client{Transport: transport, Timeout: 15 * time.Second, Jar: jar}
 	rt := &runtime{
 		vm:        goja.New(),
+		tag:       fmt.Sprintf("[rt%d]", rtSeq.Add(1)),
 		client:    client,
 		ctx:       ctx,
 		origin:    strings.TrimRight(origin, "/"),
@@ -88,6 +96,57 @@ func (rt *runtime) dbg(s string) {
 		rt.consoleFn(s)
 	}
 }
+
+// runSrc compiles and runs src as a script, logging the full source to the
+// debug file so error-stack line:col positions can be matched against it.
+func (rt *runtime) runSrc(src string) (goja.Value, error) {
+	if f := os.Getenv("CINESRCJS_DEBUG_LOG"); f != "" {
+		fileLog(rt.tag, fmt.Sprintf("RUNSRC lines=%d bytes=%d\n%s\n<<</RUNSRC>>>", strings.Count(src, "\n")+1, len(src), src))
+	}
+	return rt.runInterruptible(func() (goja.Value, error) { return rt.vm.RunString(src) })
+}
+
+// vmScriptBudget bounds one continuous VM execution (script load, gc
+// dispatch, timer callbacks). The challenge scripts are served from upstream
+// and rotate; a variant that loops forever (infinite promise recursion) must
+// fail fast so the resolver falls back to the browser worker instead of
+// hanging a session slot indefinitely.
+const vmScriptBudget = 20 * time.Second
+
+// runInterruptible runs fn on a worker goroutine and interrupts the VM if it
+// exceeds the script budget. goja's runtime must only be touched from one
+// goroutine at a time: callers of runInterruptible must not touch the VM
+// until the call returns.
+func (rt *runtime) runInterruptible(fn func() (goja.Value, error)) (goja.Value, error) {
+	type outcome struct {
+		v   goja.Value
+		err error
+	}
+	ch := make(chan outcome, 1)
+	go func() {
+		v, err := fn()
+		ch <- outcome{v, err}
+	}()
+	select {
+	case o := <-ch:
+		return o.v, o.err
+	case <-time.After(vmScriptBudget):
+		rt.dbg("VM execution exceeded budget; interrupting")
+		rt.vm.Interrupt(errVMBudget)
+		select {
+		case o := <-ch:
+			// Cancel any interrupt left armed by a race between the
+			// budget firing and fn returning on its own.
+			rt.vm.ClearInterrupt()
+			return o.v, o.err
+		case <-time.After(5 * time.Second):
+			return nil, errors.New("vm hang: interrupt did not terminate execution")
+		}
+	}
+}
+
+// errVMBudget is the interrupt reason used by the script watchdog.
+var errVMBudget = errors.New("vm script budget exceeded")
 
 func (rt *runtime) setup() error {
 	vm := rt.vm
@@ -121,14 +180,21 @@ func (rt *runtime) setup() error {
 		"cookieEnabled":       true,
 	}))
 
+	// location must mirror a real page URL: the challenge module reads
+	// location.search to bind the response to the requested season/episode.
+	pathname, search := rt.pagePath, ""
+	if i := strings.IndexByte(pathname, '?'); i >= 0 {
+		search = pathname[i:]
+		pathname = pathname[:i]
+	}
 	must(vm, g.Set("location", map[string]interface{}{
 		"href":     rt.origin + rt.pagePath,
 		"protocol": "https:",
 		"host":     hostOf(rt.origin),
 		"hostname": hostOf(rt.origin),
 		"origin":   rt.origin,
-		"pathname": rt.pagePath,
-		"search":   "",
+		"pathname": pathname,
+		"search":   search,
 		"hash":     "",
 	}))
 
@@ -310,8 +376,23 @@ func (rt *runtime) setup() error {
 	must(vm, g.Set("innerHeight", rt.fp.ScreenH))
 	must(vm, g.Set("devicePixelRatio", 1))
 
+	// Typed arrays must be callable without `new`: browsers allow
+	// Uint8Array(...) as a plain call, goja does not. The challenge scripts
+	// (and this file's own TextEncoder shim) rely on the callable form.
+	_, _ = vm.RunString(`
+		["Int8Array","Uint8Array","Uint8ClampedArray","Int16Array","Uint16Array",
+		 "Int32Array","Uint32Array","Float32Array","Float64Array"].forEach(function(name){
+			var Real = window[name];
+			if (typeof Real !== "function") return;
+			var W = function(){ return Reflect.construct(Real, arguments); };
+			W.prototype = Real.prototype;
+			window[name] = W;
+		});
+	`)
+
 	// crypto.subtle + getRandomValues
 	subtle := newSubtleShim(vm)
+	subtle.tag = rt.tag
 	cryptoObj := vm.NewObject()
 	subtleObj := vm.NewObject()
 	subtle.install(subtleObj)
@@ -352,6 +433,7 @@ func (rt *runtime) setup() error {
 
 	// fetch with cookie jar and x-cs-* header injection
 	must(vm, g.Set("fetch", rt.fetchShim))
+	_ = g.Set("__baseFetch", rt.fetchShim)
 
 	// Worker emulation (worker.go)
 	rt.installWorker(g)
@@ -365,23 +447,16 @@ func (rt *runtime) setup() error {
 	_ = console.Set("info", logFn)
 	must(vm, g.Set("console", console))
 
-	if rt.consoleFn != nil {
-		// debug: trace zero-length Uint8Array constructions (payload bugs)
-		_, _ = vm.RunString(`
-			(function(){
-				var Real = Uint8Array;
-				var W = function(a, b, c){
-					var out = new Real(a, b, c);
-					if (out.length === 0) {
-						__consoleFn("U8(0) constructed");
-					}
-					return out;
-				};
-				W.prototype = Real.prototype;
-				window.Uint8Array = W;
-			})()
-		`)
-	}
+	// JS-accessible sink into the CINESRCJS_DEBUG_LOG file, used by the
+	// debug instrumentation in Resolve's script preprocessing.
+	_ = g.Set("__fileLog", func(call goja.FunctionCall) goja.Value {
+		fileLog(rt.tag, "js: "+call.Argument(0).String())
+		return goja.Undefined()
+	})
+
+	// Standard Web APIs the challenge scripts construct (URLSearchParams,
+	// Headers, fetch-adjacent classes).
+	installWebAPI(vm, g)
 
 	return nil
 }
@@ -518,12 +593,19 @@ func (rt *runtime) drain(ctx context.Context) {
 			return
 		}
 		for _, fn := range dueFns {
-			if _, err := fn(goja.Undefined()); err != nil {
+			if _, err := rt.runInterruptible(func() (goja.Value, error) {
+				return fn(goja.Undefined())
+			}); err != nil {
 				rt.dbg("timer callback error: " + err.Error())
 			}
 		}
 		for _, j := range jobs {
-			j()
+			if _, err := rt.runInterruptible(func() (goja.Value, error) {
+				j()
+				return goja.Undefined(), nil
+			}); err != nil {
+				rt.dbg("worker job error: " + err.Error())
+			}
 		}
 		if ctx.Err() != nil {
 			return

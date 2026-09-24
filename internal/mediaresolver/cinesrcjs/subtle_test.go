@@ -25,47 +25,66 @@ func newTestVM(t *testing.T) (*goja.Runtime, *subtleShim) {
 	return vm, s
 }
 
+// runAsync evaluates js (which must evaluate to a Promise), services the
+// promise job queue by returning to Go, and reports the settled outcome.
+func runAsync(t *testing.T, vm *goja.Runtime, js string) (res goja.Value, errStr string) {
+	t.Helper()
+	if _, err := vm.RunString(`(function(){
+		__res = null; __err = null;
+		(` + js + `).then(function(v){ __res = v; }, function(e){ __err = String(e && e.message || e); });
+	})()`); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	res = vm.GlobalObject().Get("__res")
+	if v := vm.GlobalObject().Get("__err"); v != nil && !goja.IsUndefined(v) && !goja.IsNull(v) {
+		errStr = v.String()
+	}
+	return res, errStr
+}
+
 // TestSubtleAESGCMNonceSizes verifies AES-GCM against the IV lengths real
 // WebCrypto accepts. cipher.NewGCM (the previous implementation) panics on
 // any nonce that is not 12 bytes — a raw Go panic escaping the VM.
 func TestSubtleAESGCMNonceSizes(t *testing.T) {
-	plain := []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}
 	for _, ivLen := range []int{12, 8, 16} {
 		vm, _ := newTestVM(t)
 		js := `(function(){
 			var key = subtle.importKey("raw", new Uint8Array(32), {name: "AES-GCM"});
 			var iv = new Uint8Array(` + itoa(ivLen) + `);
 			for (var i = 0; i < iv.length; i++) iv[i] = 0xA0 + i;
-			var ct = subtle.encrypt({name: "AES-GCM", iv: iv}, key, new Uint8Array([1,2,3,4,5,6,7,8,9,10]));
-			var pt = subtle.decrypt({name: "AES-GCM", iv: iv}, key, ct);
+			return key.then(function(key){
+				return subtle.encrypt({name: "AES-GCM", iv: iv}, key, new Uint8Array([1,2,3,4,5,6,7,8,9,10]))
+					.then(function(ct){ return subtle.decrypt({name: "AES-GCM", iv: iv}, key, ct); });
+			});
+		})().then(function(pt){
 			var out = [];
 			var u8 = new Uint8Array(pt);
 			for (var i = 0; i < u8.length; i++) out.push(u8[i]);
 			return out.join(",");
-		})()`
-		v, err := vm.RunString(js)
-		if err != nil {
-			t.Fatalf("iv %d: %v", ivLen, err)
+		})`
+		res, errStr := runAsync(t, vm, js)
+		if errStr != "" {
+			t.Fatalf("iv %d: %s", ivLen, errStr)
 		}
-		got := v.String()
-		want := "1,2,3,4,5,6,7,8,9,10"
-		if got != want {
-			t.Fatalf("iv %d: round-trip mismatch: got %q want %q", ivLen, got, want)
+		if got := res.String(); got != "1,2,3,4,5,6,7,8,9,10" {
+			t.Fatalf("iv %d: round-trip mismatch: got %q", ivLen, got)
 		}
-		_ = plain
 	}
 }
 
-// TestSubtleAESGCMEmptyIV checks that a zero-length IV errors (as WebCrypto
+// TestSubtleAESGCMZeroIV checks that a zero-length IV rejects (as WebCrypto
 // does) instead of panicking in the GCM implementation.
 func TestSubtleAESGCMZeroIV(t *testing.T) {
 	vm, _ := newTestVM(t)
-	_, err := vm.RunString(`(function(){
+	js := `(function(){
 		var key = subtle.importKey("raw", new Uint8Array(32), {name: "AES-GCM"});
-		subtle.encrypt({name: "AES-GCM", iv: new Uint8Array(0)}, key, new Uint8Array([1]));
-	})()`)
-	if err == nil {
-		t.Fatal("expected encrypt with empty iv to fail")
+		return key.then(function(key){
+			return subtle.encrypt({name: "AES-GCM", iv: new Uint8Array(0)}, key, new Uint8Array([1]));
+		});
+	})()`
+	_, errStr := runAsync(t, vm, js)
+	if errStr == "" {
+		t.Fatal("expected encrypt with empty iv to reject")
 	}
 }
 
@@ -73,7 +92,6 @@ func TestSubtleAESGCMZeroIV(t *testing.T) {
 // silently returning a SHA-256 digest for SHA-1/384/512 requests produces
 // wrong-length keys downstream.
 func TestSubtleDigestAlgorithms(t *testing.T) {
-	vm, _ := newTestVM(t)
 	for _, tc := range []struct {
 		alg string
 		fn  func([]byte) []byte
@@ -83,13 +101,14 @@ func TestSubtleDigestAlgorithms(t *testing.T) {
 		{"SHA-384", func(b []byte) []byte { s := sha512.Sum384(b); return s[:] }},
 		{"SHA-512", func(b []byte) []byte { s := sha512.Sum512(b); return s[:] }},
 	} {
-		v, err := vm.RunString(`subtle.digest("` + tc.alg + `", "abc")`)
-		if err != nil {
-			t.Fatalf("%s: %v", tc.alg, err)
+		vm, _ := newTestVM(t)
+		res, errStr := runAsync(t, vm, `subtle.digest("`+tc.alg+`", "abc")`)
+		if errStr != "" {
+			t.Fatalf("%s: %s", tc.alg, errStr)
 		}
-		ab, ok := v.Export().(interface{ Bytes() []byte })
+		ab, ok := res.Export().(interface{ Bytes() []byte })
 		if !ok {
-			t.Fatalf("%s: digest did not return an ArrayBuffer: %T", tc.alg, v.Export())
+			t.Fatalf("%s: digest did not return an ArrayBuffer: %T", tc.alg, res.Export())
 		}
 		if want := tc.fn([]byte("abc")); !bytes.Equal(ab.Bytes(), want) {
 			t.Errorf("%s: digest mismatch: got %x want %x", tc.alg, ab.Bytes(), want)
@@ -97,34 +116,67 @@ func TestSubtleDigestAlgorithms(t *testing.T) {
 	}
 }
 
-// TestSubtleDeriveBitsRejectsNonObject pins the guard that keeps a
-// non-object algorithm argument from nil-dereferencing inside the Go
-// callback (a raw Go panic there escapes RunString and kills the process).
+// TestSubtleDeriveBitsRejectsNonObject pins that a non-object algorithm
+// argument rejects the promise (a raw Go panic there escapes RunString and
+// kills the process).
 func TestSubtleDeriveBitsRejectsNonObject(t *testing.T) {
 	vm, _ := newTestVM(t)
-	_, err := vm.RunString(`(function(){
+	js := `(function(){
 		var key = subtle.importKey("raw", new Uint8Array(32), {name: "HKDF"});
-		return subtle.deriveBits(1, key, 128);
-	})()`)
-	if err == nil {
-		t.Fatal("expected deriveBits with non-object algorithm to fail")
+		return key.then(function(key){ return subtle.deriveBits(1, key, 128); });
+	})()`
+	_, errStr := runAsync(t, vm, js)
+	if errStr == "" {
+		t.Fatal("expected deriveBits with non-object algorithm to reject")
 	}
 }
 
 // TestSubtleHKDFDeriveRoundTrip checks that deriveKey/deriveBits with valid
-// arguments still works after the guard was added.
+// arguments still works after the guards were added.
 func TestSubtleHKDFDeriveRoundTrip(t *testing.T) {
 	vm, _ := newTestVM(t)
-	v, err := vm.RunString(`(function(){
+	res, errStr := runAsync(t, vm, `(function(){
 		var key = subtle.importKey("raw", new Uint8Array(32), {name: "HKDF"});
-		var bits = subtle.deriveBits({name: "HKDF", salt: new Uint8Array(8), info: new Uint8Array(2)}, key, 256);
-		return new Uint8Array(bits).length;
-	})()`)
-	if err != nil {
-		t.Fatal(err)
+		return key.then(function(key){
+			return subtle.deriveBits({name: "HKDF", salt: new Uint8Array(8), info: new Uint8Array(2)}, key, 256);
+		});
+	})().then(function(bits){ return new Uint8Array(bits).length; })`)
+	if errStr != "" {
+		t.Fatal(errStr)
 	}
-	if n := v.ToInteger(); n != 32 {
+	if n := res.ToInteger(); n != 32 {
 		t.Fatalf("deriveBits length = %d, want 32", n)
+	}
+}
+
+// TestSubtleBogusKeyRejects pins that a bogus key argument rejects with the
+// browser-shaped TypeError the challenge scripts validate.
+func TestSubtleBogusKeyRejects(t *testing.T) {
+	vm, _ := newTestVM(t)
+	res, errStr := runAsync(t, vm, `subtle.exportKey("raw", undefined)`)
+	_ = res
+	want := "Failed to execute 'exportKey' on 'SubtleCrypto': parameter 2 is not of type 'CryptoKey'."
+	if errStr != want {
+		t.Fatalf("bogus key rejection = %q, want %q", errStr, want)
+	}
+}
+
+// TestSubtleImportKeyBadAESLength pins the browser behavior the challenge's
+// environment probes rely on: AES key data must be 128/192/256 bits.
+func TestSubtleImportKeyBadAESLength(t *testing.T) {
+	for _, n := range []int{0, 15, 23, 33, 64} {
+		vm, _ := newTestVM(t)
+		_, errStr := runAsync(t, vm, `subtle.importKey("raw", new Uint8Array(`+itoa(n)+`), {name: "AES-GCM"})`)
+		if errStr == "" {
+			t.Fatalf("%d-byte AES key data: expected rejection", n)
+		}
+	}
+	for _, n := range []int{16, 24, 32} {
+		vm, _ := newTestVM(t)
+		_, errStr := runAsync(t, vm, `subtle.importKey("raw", new Uint8Array(`+itoa(n)+`), {name: "AES-GCM"})`)
+		if errStr != "" {
+			t.Fatalf("%d-byte AES key data: unexpected rejection %q", n, errStr)
+		}
 	}
 }
 

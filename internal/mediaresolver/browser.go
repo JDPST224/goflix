@@ -218,7 +218,13 @@ func (r *Resolver) resolveInBrowser(parent context.Context, target string) (stri
 			merged.Set("User-Agent", defaultUserAgent)
 		}
 		if u, e := url.Parse(c.url); e == nil {
-			if fallback := hostHeaders[strings.ToLower(u.Host)]; fallback != nil {
+			// The network listener goroutine writes hostHeaders under mu;
+			// this loop runs on the resolve goroutine, so the read must take
+			// the same lock (a concurrent map read/write panics).
+			mu.Lock()
+			fallback := cloneHeader(hostHeaders[strings.ToLower(u.Host)])
+			mu.Unlock()
+			if len(fallback) > 0 {
 				merged = mergeHeaders(merged, fallback)
 			}
 		}

@@ -40,7 +40,9 @@ type proxySession struct {
 	// playback gets the bandwidth instead of competing with the filler.
 	liveFetches atomic.Int32
 	// warmer drives the per-session read-ahead; nil until ensureWarmer runs.
-	warmer *streamWarmer
+	// Atomic: the hot-swap healer replaces it under r.mu while proxy requests
+	// and the prefetch pump read it without the lock.
+	warmer atomic.Pointer[streamWarmer]
 	// subs holds external subtitle renditions registered by the frontend for
 	// native-HLS engines; injected into master manifests on rewrite.
 	subs []SubRendition
@@ -71,6 +73,11 @@ type proxySession struct {
 	// labels the tier by width so cinemascope encodes (1920x800) still
 	// read as 1080p. 0 when unknown.
 	maxWidth atomic.Int32
+	// bwHint is the sustainable stream rate in Mbps × 100, measured while
+	// the read-ahead primed the first-play path (server↔CDN download of the
+	// first segment). 0 until measured; Resolve reports it so the frontend
+	// can pick an instant-start tier instead of always opening on 4K.
+	bwHint atomic.Int64
 }
 
 // inflightFetch is one shared upstream download in progress. Joiners close
@@ -97,8 +104,8 @@ func (r *Resolver) newSession(reqKey, source string, headers http.Header, allowe
 	var cancels []context.CancelFunc
 	for tok, session := range r.sessions {
 		if now.After(session.expiresAt) {
-			if session.warmer != nil && session.warmer.cancel != nil {
-				cancels = append(cancels, session.warmer.cancel)
+			if w := session.warmer.Load(); w != nil && w.cancel != nil {
+				cancels = append(cancels, w.cancel)
 			}
 			delete(r.sessions, tok)
 		}
@@ -130,7 +137,6 @@ func (r *Resolver) newSession(reqKey, source string, headers http.Header, allowe
 	}
 	return token, nil
 }
-
 
 func cloneHeader(in http.Header) http.Header {
 	out := make(http.Header)

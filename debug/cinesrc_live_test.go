@@ -47,16 +47,30 @@ func TestLiveCinesrcEngineMovie(t *testing.T) {
 	t.Logf("provider=%s source=%s", res.Provider, res.Source)
 }
 
-// TestLiveCinesrcEngineTV: TV challenges bind season/episode.
+// TestLiveCinesrcEngineTV: TV challenges bind season/episode. A non-first
+// episode is included on purpose: the module binds the response to the
+// location's season/episode, and a query-less location used to make every
+// episode but the default S1E1 fail with resp_media_mismatch.
 func TestLiveCinesrcEngineTV(t *testing.T) {
 	if !liveEnabled(t) {
 		return
 	}
-	res, err := liveEngine(t).Resolve(context.Background(), "tv", "1396", "1", "1", nil)
-	if err != nil {
-		t.Fatalf("resolve: %v", err)
+	cases := []struct {
+		name     string
+		id, s, e string
+	}{
+		{"s1e1", "1396", "1", "1"},
+		{"s1e2", "1396", "1", "2"},
 	}
-	t.Logf("provider=%s source=%s", res.Provider, res.Source)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			res, err := liveEngine(t).Resolve(context.Background(), "tv", tc.id, tc.s, tc.e, nil)
+			if err != nil {
+				t.Fatalf("resolve: %v", err)
+			}
+			t.Logf("provider=%s source=%s", res.Provider, res.Source)
+		})
+	}
 }
 
 // TestLiveCinesrcEngineTVHighSeason: two-digit season/episode values.

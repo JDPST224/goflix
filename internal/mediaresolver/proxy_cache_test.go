@@ -7,6 +7,7 @@ package mediaresolver
 // boundedMirror partial-write behavior and bodyCache eviction/expiry.
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -16,6 +17,8 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -53,13 +56,13 @@ func newDormantSession(r *Resolver, source, host string) string {
 		allowed:   map[string]bool{strings.ToLower(host): true},
 		expiresAt: time.Now().Add(time.Hour),
 		subsDone:  make(chan struct{}),
-		warmer: &streamWarmer{
-			index:    make(map[string]int),
-			inflight: make(map[string]bool),
-			failedAt: make(map[string]time.Time),
-			ctx:      context.Background(),
-		},
 	}
+	s.warmer.Store(&streamWarmer{
+		index:    make(map[string]int),
+		inflight: make(map[string]bool),
+		failedAt: make(map[string]time.Time),
+		ctx:      context.Background(),
+	})
 	r.sessions[token] = s
 	return token
 }
@@ -184,6 +187,62 @@ func TestProxyRangeResponseNotCached(t *testing.T) {
 	}
 }
 
+// TestFetchForCacheAdmitsSegments pins the read-ahead cache admission: fully
+// read media segments must be stored, not only "#EXTM3U" playlists. The old
+// playlist-only admission silently discarded every segment the warmer
+// downloaded, so primePlayback always burned its 12s ceiling and the pump
+// re-downloaded the same window in a loop.
+func TestFetchForCacheAdmitsSegments(t *testing.T) {
+	const body = "0123456789abcdef"
+	var hits atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		hits.Add(1)
+		w.Header().Set("Content-Type", "video/mp2t")
+		w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+		_, _ = w.Write([]byte(body))
+	}))
+	t.Cleanup(srv.Close)
+
+	su, err := url.Parse(srv.URL)
+	if err != nil {
+		t.Fatalf("parse upstream URL: %v", err)
+	}
+	dialAddr := net.JoinHostPort("127.0.0.1", su.Port())
+	upstreamBase := "http://" + net.JoinHostPort(testUpstreamHost, su.Port())
+	r := newCacheTestResolver(dialAddr)
+	allowUpstreamHost(r, testUpstreamHost)
+	token := newDormantSession(r, upstreamBase+"/warm.m3u8", testUpstreamHost+":"+su.Port())
+	s := r.sessions[token]
+
+	segURL := upstreamBase + "/seg.ts"
+	first, err := r.fetchForCache(context.Background(), s, segURL, maxCachedSegmentBytes)
+	if err != nil {
+		t.Fatalf("fetchForCache: %v", err)
+	}
+	if string(first.data) != body {
+		t.Fatalf("fetched body = %q, want %q", first.data, body)
+	}
+	e, ok := r.cache.get(segURL)
+	if !ok {
+		t.Fatal("segment body was not admitted into the body cache")
+	}
+	if !bytes.Equal(e.data, first.data) {
+		t.Fatalf("cached segment = %q, want %q", e.data, first.data)
+	}
+
+	// A second fetch must be served from the cache, not the upstream.
+	second, err := r.fetchForCache(context.Background(), s, segURL, maxCachedSegmentBytes)
+	if err != nil {
+		t.Fatalf("second fetchForCache: %v", err)
+	}
+	if !bytes.Equal(second.data, first.data) {
+		t.Fatalf("cached fetch body = %q, want %q", second.data, first.data)
+	}
+	if n := hits.Load(); n != 1 {
+		t.Fatalf("upstream hit %d times, want 1 (segment not served from cache)", n)
+	}
+}
+
 // byteReader is a plain io.Reader without WriteTo, so io.CopyBuffer uses the
 // provided buffer instead of a single Write.
 type byteReader struct {
@@ -265,11 +324,11 @@ func TestBodyCacheEvictionAndExpiry(t *testing.T) {
 // startWarmup only and must stay rendition-free.
 func TestMaybeAttachSubRenditionsProviders(t *testing.T) {
 	cases := map[string]bool{
-		"vidking":   true,
-		"cinesrc":   true,
-		"vidsrcme":  true,
-		"vixsrc":    false,
-		"":          false,
+		"vidking":  true,
+		"cinesrc":  true,
+		"vidsrcme": true,
+		"vixsrc":   false,
+		"":         false,
 	}
 	for provider, wantSubs := range cases {
 		r := newCacheTestResolver("127.0.0.1:0")
@@ -295,6 +354,48 @@ func TestMaybeAttachSubRenditionsProviders(t *testing.T) {
 			t.Fatalf("provider %q: expected no embedded renditions, got %d", provider, len(got))
 		}
 	}
+}
+
+// TestWarmerAccessIsRaceFreeAcrossHotSwap exercises the concurrent access
+// pattern the healer creates: hotSwapSession replaces s.warmer under r.mu
+// while the prefetch pump reads it without the lock. Before the field became
+// an atomic.Pointer this failed under -race.
+func TestWarmerAccessIsRaceFreeAcrossHotSwap(t *testing.T) {
+	r := newCacheTestResolver("127.0.0.1:0")
+	token := newDormantSession(r, "https://upstream.test/master.m3u8", "upstream.test")
+	s := r.sessions[token]
+
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			r.pumpPrefetch(s)
+			r.registerSegments(s, mustParseURL(t, "https://upstream.test/master.m3u8"), "")
+			r.noteSegmentServed(s, "https://upstream.test/seg0.ts")
+		}
+	}()
+
+	for i := 0; i < 20; i++ {
+		r.hotSwapSession(token, &directResolution{Source: "invalid-url"})
+	}
+	close(stop)
+	wg.Wait()
+}
+
+func mustParseURL(t *testing.T, raw string) *url.URL {
+	t.Helper()
+	u, err := url.Parse(raw)
+	if err != nil {
+		t.Fatalf("parse %q: %v", raw, err)
+	}
+	return u
 }
 
 // TestLadderDoesNotClobberFrontendRenditions: when the frontend registers

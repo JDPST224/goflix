@@ -78,6 +78,12 @@ type Config struct {
 	// persist to across restarts. Defaults to "blocked.json" in the
 	// working directory; "-" disables persistence.
 	BlockListPath string
+	// TMDB credentials (v4 Bearer Read Access Token preferred over v3 API
+	// key) used by the vidking direct resolver as its metadata source.
+	// Required for vidking direct resolution; without credentials it falls
+	// back to the browser scrape.
+	TMDBAccessToken string
+	TMDBAPIKey      string
 }
 
 // playbackHeaders are the browser headers captured during resolution and
@@ -384,8 +390,8 @@ func New(cfg Config) (*Resolver, error) {
 				r.mu.Lock()
 				for tok, s := range r.sessions {
 					if now.After(s.expiresAt) {
-						if s.warmer != nil && s.warmer.cancel != nil {
-							cancels = append(cancels, s.warmer.cancel)
+						if w := s.warmer.Load(); w != nil && w.cancel != nil {
+							cancels = append(cancels, w.cancel)
 						}
 						delete(r.sessions, tok)
 					}
@@ -423,8 +429,8 @@ func (r *Resolver) Close() {
 	if !r.closed {
 		r.closed = true
 		for _, s := range r.sessions {
-			if s.warmer != nil && s.warmer.cancel != nil {
-				cancels = append(cancels, s.warmer.cancel)
+			if w := s.warmer.Load(); w != nil && w.cancel != nil {
+				cancels = append(cancels, w.cancel)
 			}
 		}
 		r.sessions = make(map[string]*proxySession)

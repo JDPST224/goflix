@@ -32,19 +32,19 @@ func (w *streamWarmer) context() context.Context { return w.ctx }
 // from the proxy path on the first request.
 func (r *Resolver) ensureWarmer(s *proxySession) {
 	r.mu.Lock()
-	if s.warmer != nil || r.closed {
+	if s.warmer.Load() != nil || r.closed {
 		r.mu.Unlock()
 		return
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	s.warmer = &streamWarmer{
+	w := &streamWarmer{
 		index:    make(map[string]int),
 		inflight: make(map[string]bool),
 		failedAt: make(map[string]time.Time),
 		ctx:      ctx,
 		cancel:   cancel,
 	}
-	w := s.warmer
+	s.warmer.Store(w)
 	r.mu.Unlock()
 	go r.warmManifestChain(w.context(), s)
 }
@@ -57,6 +57,72 @@ func (r *Resolver) startWarmup(token string) {
 	if s != nil {
 		r.ensureWarmer(s)
 	}
+}
+
+// primePlaybackCeiling bounds how long a resolve may hold the response while
+// the read-ahead primes the first-play path. The player's readiness window
+// starts when the resolve returns; a cold first segment (4K segments run
+// tens of MB) can outrun it, which surfaced as "playback timed out — try
+// again" on the first launch while a retry (served from the now-warm cache)
+// played instantly. Waiting here moves that wait into the resolve phase,
+// which the frontend already waits out patiently.
+const primePlaybackCeiling = 12 * time.Second
+
+// primePlayback waits until the read-ahead has the media playlist registered
+// and the first segment (or init section) in the body cache, or until the
+// ceiling elapses — whichever comes first. Best effort: playback starts
+// regardless, the warmup just keeps running in the background.
+//
+// While waiting it also measures the server↔CDN rate from the first
+// segment's size and download duration; the resolve reports that rate so
+// the frontend can start at a tier whose first fragment fits the pipe
+// instead of always opening on the top tier (whose 15-50 MB fragment is
+// exactly what made startup buffer so long).
+func (r *Resolver) primePlayback(token string, ceiling time.Duration) {
+	start := time.Now()
+	deadline := start.Add(ceiling)
+	for {
+		r.mu.Lock()
+		s := r.sessions[token]
+		r.mu.Unlock()
+		if s == nil {
+			return // session gone (player aborted): stop waiting
+		}
+		w := s.warmer.Load()
+		if w != nil {
+			w.mu.Lock()
+			n := len(w.segments)
+			var first string
+			if n > 0 {
+				first = w.segments[0]
+			}
+			w.mu.Unlock()
+			if n > 0 {
+				if entry, cached := r.cache.get(first); cached {
+					r.storeBandwidthHint(s, entry, time.Since(start))
+					return
+				}
+			}
+		}
+		if time.Now().After(deadline) {
+			return
+		}
+		time.Sleep(120 * time.Millisecond)
+	}
+}
+
+// storeBandwidthHint converts a primed segment's size and download window
+// into a Mbps hint on the session. Skipped when the segment was already
+// cached (cache-hit replay: no fresh measurement available).
+func (r *Resolver) storeBandwidthHint(s *proxySession, entry *cacheEntry, dt time.Duration) {
+	if entry == nil || len(entry.data) == 0 || dt < 500*time.Millisecond {
+		return
+	}
+	mbps := float64(len(entry.data)) * 8 / dt.Seconds() / 1e6
+	if mbps <= 0 {
+		return
+	}
+	s.bwHint.Store(int64(mbps * 100))
 }
 
 // warmManifestChain runs right after a session is created: it downloads the
@@ -131,7 +197,7 @@ func (r *Resolver) warmPlaylist(ctx context.Context, s *proxySession, raw string
 // front-to-back from the served cursor, so download order follows playlist
 // order even when two run at once.
 func (r *Resolver) pumpPrefetch(s *proxySession) {
-	w := s.warmer
+	w := s.warmer.Load()
 	if w == nil {
 		return
 	}

@@ -161,7 +161,14 @@ func TestBandwidth(t *testing.T) {
 			headless = b
 		}
 	}
-	r, err := New(Config{MaxBrowserSessions: 1, BrowserHeadless: headless})
+	r, err := New(Config{
+		MaxBrowserSessions: 1,
+		BrowserHeadless:    headless,
+		// Vidking metadata comes straight from TMDB; the credentials mirror
+		// the production config.conf wiring.
+		TMDBAccessToken: strings.TrimSpace(os.Getenv("TMDB_ACCESS_TOKEN")),
+		TMDBAPIKey:      strings.TrimSpace(os.Getenv("TMDB_API_KEY")),
+	})
 
 	if err != nil {
 		t.Fatal(err)

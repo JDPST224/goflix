@@ -37,6 +37,31 @@ func TestDecompressSubtitleBodyBounded(t *testing.T) {
 	}
 }
 
+// TestHostInAllowlist pins the SSRF host check shared by the initial subtitle
+// URL validation and the redirect guard: exact domains and their subdomains
+// pass, lookalike suffixes do not.
+func TestHostInAllowlist(t *testing.T) {
+	domains := []string{"example.com", "sub.example.org"}
+	cases := map[string]bool{
+		"example.com":         true,
+		"dl.example.com":      true,
+		"EXAMPLE.COM":         true,
+		"sub.example.org":     true,
+		"x.sub.example.org":   true,
+		"a.b.example.org":     false, // subdomain of example.org, not of sub.example.org
+		"evil-example.com":    false,
+		"example.com.evil.io": false,
+		"notexample.com":      false,
+		"example.org":         false,
+		"":                    false,
+	}
+	for host, want := range cases {
+		if got := hostInAllowlist(host, domains); got != want {
+			t.Errorf("hostInAllowlist(%q) = %v, want %v", host, got, want)
+		}
+	}
+}
+
 // TestDecompressSubtitleBodyOK: a normally-sized gzip payload decompresses
 // unchanged.
 func TestDecompressSubtitleBodyOK(t *testing.T) {

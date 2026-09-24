@@ -147,7 +147,7 @@ func New(d *Deps) http.Handler {
 	// static file server to map to login.html.
 	mux.HandleFunc("/login", d.loginPageHandler)
 	if d.DebugProfiling {
-		debugRoutes(mux)
+		d.debugRoutes(mux)
 	}
 	mux.Handle("/", staticFileServer("./static"))
 

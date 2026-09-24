@@ -259,16 +259,23 @@ func (r *Resolver) doFetchForCache(ctx context.Context, s *proxySession, rawURL 
 	r.mu.Unlock()
 	result := &cachedFetch{data: data, contentType: resp.Header.Get("Content-Type"), status: resp.StatusCode}
 	if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusPartialContent {
+		// Media segments are immutable (VOD) exactly like completed
+		// playlists, so they get the full entry lifetime. Admitting only
+		// "#EXTM3U" bodies silently discarded every segment the read-ahead
+		// downloaded: priming then always timed out (12s added to every
+		// resolve) and the prefetch pump re-downloaded the same window in a
+		// loop. The LRU's byte budget already bounds retention.
+		ttl := cacheEntryTTL
 		if strings.Contains(string(data), "#EXTM3U") {
-			ttl := playlistTTL(string(data))
-			r.cache.put(&cacheEntry{
-				key:         rawURL,
-				data:        data,
-				status:      resp.StatusCode,
-				contentType: resp.Header.Get("Content-Type"),
-				expiresAt:   time.Now().Add(ttl),
-			})
+			ttl = playlistTTL(string(data))
 		}
+		r.cache.put(&cacheEntry{
+			key:         rawURL,
+			data:        data,
+			status:      resp.StatusCode,
+			contentType: resp.Header.Get("Content-Type"),
+			expiresAt:   time.Now().Add(ttl),
+		})
 	}
 	return result, nil
 }
@@ -299,7 +306,7 @@ func playlistTTL(text string) time.Duration {
 // session's read-ahead, admits every referenced CDN host for proxied access,
 // and kicks the prefetch pump.
 func (r *Resolver) registerSegments(s *proxySession, base *url.URL, playlistText string) {
-	w := s.warmer
+	w := s.warmer.Load()
 	if w == nil {
 		return
 	}
@@ -374,7 +381,7 @@ func playlistSegmentURLs(text string, base *url.URL) []string {
 // noteSegmentServed advances the read-ahead cursor after a segment is handed
 // to the player and kicks the next prefetch download.
 func (r *Resolver) noteSegmentServed(s *proxySession, rawURL string) {
-	w := s.warmer
+	w := s.warmer.Load()
 	if w == nil {
 		return
 	}

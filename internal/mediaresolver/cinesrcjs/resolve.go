@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -74,6 +75,8 @@ var (
 	reProdName = regexp.MustCompile(`/([A-Za-z0-9_-]+-prod\.js)`)
 	rePowWasm  = regexp.MustCompile(`/pow-v\d+\.wasm`)
 	reServerID = regexp.MustCompile(`\{"id":"([a-z0-9_-]+)","name"`)
+	// reBField extracts the b token from the new structured action response.
+	reBField = regexp.MustCompile(`"b":"([A-Za-z0-9_-]+)"`)
 	// createServerReference("<id>",…,"<name>"): the app chunk maps each
 	// server action to its Next.js id. The site's ids rotate on every
 	// deploy, so they must be discovered at asset-load time instead of
@@ -189,8 +192,11 @@ func (r *Resolver) attemptServer(ctx context.Context, origin, ua, mediaType, tmd
 		return nil, err
 	}
 	console := func(s string) { r.logf("vm: %s", s) }
-	pathBase := "/embed/" + mediaType + "/" + tmdbID
-	rtDonut, err := newRuntime(ctx, origin, pathBase, ua, r.fingerprint(), jar, r.Transport, console)
+	// The runtimes get the FULL page path (query included): the challenge
+	// module reads location.search to bind the response to the requested
+	// season/episode, so a query-less location made every TV episode but the
+	// default S1E1 fail dr() with resp_media_mismatch.
+	rtDonut, err := newRuntime(ctx, origin, pagePath, ua, r.fingerprint(), jar, r.Transport, console)
 	if err != nil {
 		return nil, err
 	}
@@ -199,7 +205,7 @@ func (r *Resolver) attemptServer(ctx context.Context, origin, ua, mediaType, tmd
 	rtDonut.storePK = r.pkStore
 	rtDonut.nextCanvas = r.nextCanvas
 
-	rtD6, err := newRuntime(ctx, origin, pathBase, ua, r.fingerprint(), jar, r.Transport, console)
+	rtD6, err := newRuntime(ctx, origin, pagePath, ua, r.fingerprint(), jar, r.Transport, console)
 	if err != nil {
 		return nil, err
 	}
@@ -209,7 +215,7 @@ func (r *Resolver) attemptServer(ctx context.Context, origin, ua, mediaType, tmd
 	rtD6.nextCanvas = r.nextCanvas
 
 	// capture the challenge module as it registers itself
-	if _, err := rtD6.vm.RunString(`
+	if _, err := rtD6.runSrc(`
 		var __d6 = null;
 		addEventListener("_cs", function(ev){
 			var key = ev.detail;
@@ -230,10 +236,31 @@ func (r *Resolver) attemptServer(ctx context.Context, origin, ua, mediaType, tmd
 	}
 
 	t1 := time.Now()
-	if _, err := rtDonut.vm.RunString("(function(){\n" + string(assets.donut) + "\n})()"); err != nil {
+	// debug: instrument the bytecode VM's `new` op (both source styles) so a
+	// missing constructor (undefined in the shim environment) is reported
+	// with its arguments instead of an opaque "Value is not an object"
+	// TypeError from Reflect.construct / Function.bind.apply.
+	instrument := func(name string, src string) string {
+		if os.Getenv("CINESRCJS_DEBUG_LOG") == "" {
+			return src
+		}
+		const reflectNewOp = "Reflect.construct(Reflect.apply(Function.prototype.bind,d,e),[])"
+		const plainNewOp = "new(Function.bind.apply(d,e))"
+		patched := src
+		if strings.Contains(patched, reflectNewOp) {
+			patched = strings.ReplaceAll(patched, reflectNewOp,
+				"(function(){if(d===undefined||d===null){__fileLog(\""+name+" ReflectNew: constructor undefined, args=\"+JSON.stringify(e)+\"\\n\"+(new Error().stack||\"\"));throw new TypeError(\"VM: constructor is \"+d);}return Reflect.construct(Reflect.apply(Function.prototype.bind,d,e),[])})()")
+		}
+		if strings.Contains(patched, plainNewOp) {
+			patched = strings.ReplaceAll(patched, plainNewOp,
+				"new(function(){if(d===undefined||d===null){__fileLog(\""+name+" new: constructor undefined, args=\"+JSON.stringify(e?e.slice(1):e)+\"\\n\"+(new Error().stack||\"\"));throw new TypeError(\"VM: constructor is \"+d);}return Function.bind.apply(d,e)}())")
+		}
+		return patched
+	}
+	if _, err := rtDonut.runSrc("(function(){\n" + instrument("donut", string(assets.donut)) + "\n})()"); err != nil {
 		return nil, fmt.Errorf("donut load: %w", err)
 	}
-	if _, err := rtD6.vm.RunString("(function(){\n" + string(assets.prod) + "\n})()"); err != nil {
+	if _, err := rtD6.runSrc("(function(){\n" + instrument("prod", string(assets.prod)) + "\n})()"); err != nil {
 		return nil, fmt.Errorf("challenge module load: %w", err)
 	}
 	r.logf("phase scriptload: %d ms", time.Since(t1).Milliseconds())
@@ -250,6 +277,9 @@ func (r *Resolver) attemptServer(ctx context.Context, origin, ua, mediaType, tmd
 	ss2v := rtDonut.vm.GlobalObject().Get("__ss2_challenge")
 	if ss2v == nil || goja.IsUndefined(ss2v) || goja.IsNull(ss2v) {
 		return nil, errors.New("stage2 module did not register")
+	}
+	if os.Getenv("CINESRCJS_DEBUG_LOG") != "" {
+		rtD6.dbg("module keys: " + strings.Join(d6v.ToObject(rtD6.vm).Keys(), ","))
 	}
 
 	// bootstrap: x-cs-q binds the media identity
@@ -302,7 +332,11 @@ func (r *Resolver) attemptServer(ctx context.Context, origin, ua, mediaType, tmd
 	if err != nil {
 		return nil, err
 	}
-	text, err := rtD6.postRaw(ctx, pagePath, map[string]string{
+	// The getStream action runs through the VM's fetch so any fetch wrapper
+	// the challenge module installed (the embed routes its action calls the
+	// same way) can process the response rows; fall back to the raw text
+	// when the wrapper is absent.
+	text, err := rtD6.runAction(ctx, pagePath, map[string]string{
 		"accept":                 "text/x-component",
 		"content-type":           "text/plain;charset=UTF-8",
 		"next-action":            r.streamActionID(),
@@ -313,6 +347,25 @@ func (r *Resolver) attemptServer(ctx context.Context, origin, ua, mediaType, tmd
 	}
 	cipher, err := extractCipher(text)
 	if err != nil {
+		if os.Getenv("CINESRCJS_DEBUG_LOG") != "" {
+			fileLog("extractCipher", fmt.Sprintf("no cipher; status-shape snippet=%.2000s", strings.TrimSpace(text)))
+		}
+		// The action response now carries a structured object
+		// ({a:"$@1",f:"",b:"<token>",q:"",i:false}) instead of an r2 row.
+		// Try the b field through the module's dr() in the plausible token
+		// forms before giving up.
+		if m := reBField.FindStringSubmatch(text); m != nil && m[1] != "" {
+			for _, cand := range []string{"r2." + m[1], m[1], strings.TrimSpace(text)} {
+				res2, derr := rtD6.decrypt(ctx, cand)
+				if derr == nil {
+					if res2.Provider == "" {
+						res2.Provider = srv
+					}
+					return res2, nil
+				}
+				r.logf("dr on b-field %q failed: %v", redact(cand), derr)
+			}
+		}
 		return nil, err
 	}
 	result, err := rtD6.decrypt(ctx, cipher)
@@ -523,11 +576,11 @@ func (rt *runtime) runGCParallel(ctx context.Context, other *runtime) (c1, c2 st
 }
 
 func rtD6GC(ctx context.Context, rt *runtime) (string, error) {
-	if _, err := rt.vm.RunString(`
+	if _, err := rt.runSrc(`
 		(function(){
 			__gcOut = null;
 			window.__d6.gc().then(function(v){ __gcOut = {ok: true, v: v}; },
-			                     function(e){ __gcOut = {ok: false, err: String(e && e.message || e)}; });
+			                     function(e){ __gcOut = {ok: false, err: String(e && e.message || e), stack: String(e && e.stack || "")}; });
 		})()
 	`); err != nil {
 		return "", fmt.Errorf("cinesrcjs: gc dispatch: %w", err)
@@ -536,11 +589,11 @@ func rtD6GC(ctx context.Context, rt *runtime) (string, error) {
 }
 
 func rtSS2GC(ctx context.Context, rt *runtime) (string, error) {
-	if _, err := rt.vm.RunString(`
+	if _, err := rt.runSrc(`
 		(function(){
 			__gcOut = null;
 			window.__ss2_challenge.gc().then(function(v){ __gcOut = {ok: true, v: v}; },
-			                                   function(e){ __gcOut = {ok: false, err: String(e && e.message || e)}; });
+			                                   function(e){ __gcOut = {ok: false, err: String(e && e.message || e), stack: String(e && e.stack || "")}; });
 		})()
 	`); err != nil {
 		return "", fmt.Errorf("cinesrcjs: gc dispatch: %w", err)
@@ -556,6 +609,9 @@ func gcWait(ctx context.Context, rt *runtime) (string, error) {
 			o := out.ToObject(rt.vm)
 			if o.Get("ok").ToBoolean() {
 				return o.Get("v").String(), nil
+			}
+			if st := o.Get("stack"); st != nil && !goja.IsUndefined(st) && st.String() != "" {
+				rt.dbg("gc rejection stack:\n" + st.String())
 			}
 			return "", fmt.Errorf("cinesrcjs: challenge failed: %s", o.Get("err").String())
 		}
@@ -581,7 +637,7 @@ func (rt *runtime) decrypt(ctx context.Context, cipher string) (*Result, error) 
 			                                          function(e){ __drOut = {ok: false, err: String(e && e.message || e)}; });
 		})()
 	`
-	if _, err := rt.vm.RunString(script); err != nil {
+	if _, err := rt.runSrc(script); err != nil {
 		return nil, err
 	}
 	for i := 0; i < 800; i++ {
@@ -699,21 +755,44 @@ func (r *Resolver) ensureAssets(ctx context.Context, origin, ua string) error {
 func (r *Resolver) fetchAssets(ctx context.Context, origin, ua string) (*assets, *powRuntime, error) {
 	client := &http.Client{Transport: r.Transport, Timeout: 20 * time.Second}
 	get := func(path string) ([]byte, error) {
-		req, err := http.NewRequestWithContext(ctx, "GET", origin+path, nil)
-		if err != nil {
-			return nil, err
+		// The upstream intermittently answers 500 for a few seconds at a
+		// time; one quick retry keeps asset loads from aborting a resolve
+		// that would otherwise have succeeded.
+		var lastErr error
+		for attempt := 0; attempt < 3; attempt++ {
+			if attempt > 0 {
+				select {
+				case <-ctx.Done():
+					return nil, lastErr
+				case <-time.After(time.Duration(attempt) * time.Second):
+				}
+			}
+			req, err := http.NewRequestWithContext(ctx, "GET", origin+path, nil)
+			if err != nil {
+				return nil, err
+			}
+			req.Header.Set("user-agent", ua)
+			req.Header.Set("referer", origin+"/")
+			resp, err := client.Do(req)
+			if err != nil {
+				lastErr = err
+				continue
+			}
+			if resp.StatusCode != http.StatusOK {
+				body, _ := io.ReadAll(io.LimitReader(resp.Body, 64))
+				resp.Body.Close()
+				lastErr = fmt.Errorf("%s: status %d %s", path, resp.StatusCode, strings.TrimSpace(string(body)))
+				continue
+			}
+			body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+			resp.Body.Close()
+			if err != nil {
+				lastErr = err
+				continue
+			}
+			return body, nil
 		}
-		req.Header.Set("user-agent", ua)
-		req.Header.Set("referer", origin+"/")
-		resp, err := client.Do(req)
-		if err != nil {
-			return nil, err
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode != http.StatusOK {
-			return nil, fmt.Errorf("%s: status %d", path, resp.StatusCode)
-		}
-		return io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+		return nil, lastErr
 	}
 
 	// locate the app chunk that names the challenge scripts. Chunks are
@@ -865,11 +944,12 @@ func routerStateTree(mediaType, tmdbID string) string {
 	return url.QueryEscape(v)
 }
 
-// extractCipher pulls the r2.<...> payload out of a server-action response.
+// extractCipher pulls the encrypted payload out of a server-action response.
 // Next.js emits small payloads as quoted flight rows (1:"r2.…") but large
 // ones as length-prefixed text rows (2:T<hex>,r2.…) — the earlier naive
 // quote-scan truncated big payloads (e.g. episodes with many subtitles) and
-// the truncated base64 failed to decode in dr().
+// the truncated base64 failed to decode in dr(). The cipher version prefix
+// is r2 or r3 depending on the deployed challenge generation.
 func extractCipher(text string) (string, error) {
 	if strings.Contains(text, "e1:invalid_challenge") {
 		return "", errors.New("invalid_challenge")
@@ -881,7 +961,10 @@ func extractCipher(text string) (string, error) {
 		}
 		return "", errors.New(strings.TrimSpace(rest))
 	}
-	i := strings.Index(text, "r2.")
+	i := strings.Index(text, "r3.")
+	if i < 0 {
+		i = strings.Index(text, "r2.")
+	}
 	if i < 0 {
 		return "", errors.New("no r2 cipher in response")
 	}

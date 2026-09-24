@@ -22,8 +22,8 @@ import (
 // scripts have decrypted one; the chain it performs is fully reproducible in
 // plain Go:
 //
-//  1. GET db.speedracelight.com/3/{movie|tv}/{tmdbId}?append_to_response=external_ids
-//     → public TMDB mirror giving the title/year/imdb id the source API wants.
+//  1. GET api.themoviedb.org/3/{movie|tv}/{tmdbId}?append_to_response=external_ids
+//     → TMDB giving the title/year/imdb id the source API wants.
 //  2. GET api.speedracelight.com/seed?mediaId={tmdbId} → {seed, ttlMs}.
 //  3. GET api.speedracelight.com/{server}/sources-with-title?…&enc=2&seed=…
 //     → base64url(XOR(JSON, keystream)) with a four-byte "mvm1" magic prefix.
@@ -38,7 +38,12 @@ import (
 // inherited whatever it chose.
 const (
 	vkAPIBase = "https://api.speedracelight.com"
-	vkDBBase  = "https://db.speedracelight.com/3"
+
+	// vkTMDBBase serves the metadata record (title/year/imdb id) the source
+	// API requires. Fetched straight from TMDB with the configured
+	// credentials — the old shared db.speedracelight.com mirror answered
+	// 429 to everyone and is gone.
+	vkTMDBBase = "https://api.themoviedb.org/3"
 
 	// vkResponseCap bounds API responses; payloads embed subtitle lists and
 	// can be large, but are nowhere near this cap.
@@ -345,19 +350,33 @@ func (r *Resolver) vidkingQueryString(srv vidkingServer, q vidkingQuery, seed st
 	return qs.Encode()
 }
 
-// fetchVidkingMeta reads the public TMDB mirror for the fields the source API
-// requires (it refuses requests without a real title).
+// fetchVidkingMeta reads the TMDB record for the fields the source API
+// requires (it refuses requests without a real title). The old shared
+// db.speedracelight.com mirror answered 429 to everyone and is gone; TMDB is
+// fetched directly with the configured credentials (Bearer token preferred,
+// mirroring catalog.Client's precedence).
 func (r *Resolver) fetchVidkingMeta(ctx context.Context, client *http.Client, req MediaRequest) (*vidkingMeta, error) {
+	if r.cfg.TMDBAccessToken == "" && r.cfg.TMDBAPIKey == "" {
+		return nil, errors.New("no TMDB credentials configured for vidking metadata lookup")
+	}
 	kind := "movie"
 	if req.Type == TV {
 		kind = "tv"
 	}
-	apiReq, err := http.NewRequestWithContext(ctx, http.MethodGet,
-		fmt.Sprintf("%s/%s/%s?append_to_response=external_ids", vkDBBase, kind, url.PathEscape(req.ID)), nil)
+	endpoint := fmt.Sprintf("%s/%s/%s?append_to_response=external_ids", vkTMDBBase, kind, url.PathEscape(req.ID))
+	apiReq, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, err
 	}
 	apiReq.Header.Set("User-Agent", defaultUserAgent)
+	apiReq.Header.Set("accept", "application/json")
+	if r.cfg.TMDBAccessToken != "" {
+		apiReq.Header.Set("Authorization", "Bearer "+r.cfg.TMDBAccessToken)
+	} else {
+		q := apiReq.URL.Query()
+		q.Set("api_key", r.cfg.TMDBAPIKey)
+		apiReq.URL.RawQuery = q.Encode()
+	}
 	resp, err := client.Do(apiReq)
 	if err != nil {
 		return nil, fmt.Errorf("metadata lookup: %w", err)
@@ -370,12 +389,17 @@ func (r *Resolver) fetchVidkingMeta(ctx context.Context, client *http.Client, re
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("metadata lookup returned status %d", resp.StatusCode)
 	}
+	return parseVidkingMeta(body)
+}
+
+// parseVidkingMeta validates and decodes a metadata record from either source.
+func parseVidkingMeta(body []byte) (*vidkingMeta, error) {
 	var meta vidkingMeta
 	if err := json.Unmarshal(body, &meta); err != nil {
-		return nil, fmt.Errorf("metadata lookup returned invalid JSON: %w", err)
+		return nil, fmt.Errorf("returned invalid JSON: %w", err)
 	}
 	if meta.displayTitle() == "" {
-		return nil, errors.New("metadata lookup returned no title")
+		return nil, errors.New("returned no title")
 	}
 	return &meta, nil
 }

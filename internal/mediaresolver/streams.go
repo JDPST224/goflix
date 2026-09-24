@@ -281,6 +281,61 @@ func (r *Resolver) recordTraffic(s *proxySession, n int64) {
 	r.bwMu.Unlock()
 }
 
+// viewerBandwidthWindow bounds how far back the viewer downlink hint looks.
+const viewerBwWindowBuckets = 6 // 6 × 5s ≈ 30s of recent history
+
+// viewerBandwidthHint aggregates a viewer's recent served throughput into a
+// sustainable Mbps figure (0 when there is no meaningful history). It comes
+// from the server→client traffic the rolling buckets already record, so it
+// reflects the hop that actually gates startup: how fast the player pulls
+// fragments from this server.
+func (r *Resolver) viewerBandwidthHint(ip string) float64 {
+	if ip == "" {
+		return 0
+	}
+	slot := time.Now().Unix() / bwBucketSeconds
+	cutoff := slot - int64(viewerBwWindowBuckets)
+	r.bwMu.Lock()
+	defer r.bwMu.Unlock()
+	if r.bwBuckets == nil {
+		return 0
+	}
+	var total int64
+	for k, b := range r.bwBuckets {
+		if k <= cutoff || k > slot {
+			continue
+		}
+		if n, ok := b.perIP[ip]; ok && n > 0 {
+			total += n
+		}
+	}
+	// Noise floor: only report when a meaningful amount was served.
+	if total < 4<<20 {
+		return 0
+	}
+	return float64(total) * 8 / (float64(viewerBwWindowBuckets*bwBucketSeconds) * 1e6)
+}
+
+// SessionBandwidthHint reports the sustainable stream rate for this session
+// and viewer in Mbps (0 when unknown). It is the minimum of the server↔CDN
+// rate measured while priming and the viewer's recent served-throughput
+// history — either hop alone can be the bottleneck when proxying 4K.
+func (r *Resolver) SessionBandwidthHint(token, viewerIP string) float64 {
+	r.mu.Lock()
+	s := r.sessions[token]
+	r.mu.Unlock()
+	if s == nil {
+		return 0
+	}
+	hint := float64(s.bwHint.Load()) / 100
+	if viewerIP != "" {
+		if v := r.viewerBandwidthHint(viewerIP); v > 0 && (hint <= 0 || v < hint) {
+			hint = v
+		}
+	}
+	return hint
+}
+
 // ipBlocked reports whether a viewer address is blocked by an administrator.
 func (r *Resolver) ipBlocked(ip string) bool {
 	if ip == "" {
@@ -402,8 +457,8 @@ func (r *Resolver) StopStream(token string) bool {
 	if !ok {
 		return false
 	}
-	if s.warmer != nil && s.warmer.cancel != nil {
-		s.warmer.cancel()
+	if w := s.warmer.Load(); w != nil && w.cancel != nil {
+		w.cancel()
 	}
 	return true
 }
@@ -446,8 +501,8 @@ func (r *Resolver) blockIP(ip string) {
 	}
 	r.mu.Unlock()
 	for _, s := range stops {
-		if s.warmer != nil && s.warmer.cancel != nil {
-			s.warmer.cancel()
+		if w := s.warmer.Load(); w != nil && w.cancel != nil {
+			w.cancel()
 		}
 	}
 	r.persistBlockedIPs()

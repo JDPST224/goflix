@@ -427,7 +427,6 @@ func evictExpiredCDNTokens() {
 	}
 }
 
-
 // fetchVidsrcmeCDNToken retrieves the JWT playback authorization token from {cdnOrigin}/generate.php,
 // caching valid tokens for up to 5 minutes to avoid rate-limit (429) errors.
 func (r *Resolver) fetchVidsrcmeCDNToken(ctx context.Context, client *http.Client, cdnOrigin string) (string, error) {

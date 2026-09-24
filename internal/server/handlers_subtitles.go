@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -157,6 +158,18 @@ func readBounded(r io.Reader) ([]byte, bool, error) {
 	return body, false, nil
 }
 
+// hostInAllowlist reports whether host (a bare hostname, no port) equals one
+// of the allowed domains or is a subdomain of one.
+func hostInAllowlist(host string, allowedDomains []string) bool {
+	host = strings.ToLower(host)
+	for _, dom := range allowedDomains {
+		if host == dom || strings.HasSuffix(host, "."+dom) {
+			return true
+		}
+	}
+	return false
+}
+
 // fetchSubtitleVTT validates targetURL against an allowed domain list (preventing SSRF),
 // downloads the subtitle file, handles gzip decompression if necessary, and converts
 // SRT to standard WebVTT.
@@ -166,15 +179,7 @@ func fetchSubtitleVTT(ctx context.Context, targetURL, referer string, allowedDom
 		return "", http.StatusBadRequest, "Invalid subtitle URL"
 	}
 
-	host := strings.ToLower(u.Hostname())
-	allowedHost := false
-	for _, dom := range allowedDomains {
-		if host == dom || strings.HasSuffix(host, "."+dom) {
-			allowedHost = true
-			break
-		}
-	}
-	if !allowedHost {
+	if !hostInAllowlist(u.Hostname(), allowedDomains) {
 		return "", http.StatusBadRequest, "Invalid subtitle URL"
 	}
 
@@ -187,7 +192,19 @@ func fetchSubtitleVTT(ctx context.Context, targetURL, referer string, allowedDom
 	}
 	req.Header.Set("User-Agent", subtitleUpstreamUA)
 
-	res, err := subtitles.Client.Do(req)
+	// Redirects must stay on the allowlist too: an open redirect on an
+	// allowed domain would otherwise bypass the SSRF guard.
+	client := &http.Client{
+		Transport: subtitles.Client.Transport,
+		Timeout:   subtitles.Client.Timeout,
+		CheckRedirect: func(next *http.Request, via []*http.Request) error {
+			if !hostInAllowlist(next.URL.Hostname(), allowedDomains) {
+				return fmt.Errorf("subtitle redirect to disallowed host %q", strings.ToLower(next.URL.Host))
+			}
+			return nil
+		},
+	}
+	res, err := client.Do(req)
 	if err != nil {
 		log.Printf("[Subtitles] %s download error %s://%s%s: %v", logProvider, u.Scheme, u.Host, u.Path, err)
 		return "", http.StatusBadGateway, "Subtitle download failed"

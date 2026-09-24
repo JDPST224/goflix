@@ -292,8 +292,9 @@ el.logoutBtn.addEventListener('click', async () => {
     if (!status.authed || !status.user) { location.href = '/login'; return; }
     if (!status.isAdmin) { location.href = '/'; return; }
 
-    el.railUsername.textContent = status.user.username || status.user.email || 'Admin';
-    if (status.user.has_avatar || status.hasAvatar) el.railAvatar.src = '/api/auth/avatar';
+    // /api/auth/status returns `user` as the username string, not an object.
+    el.railUsername.textContent = status.user || 'Admin';
+    if (status.hasAvatar) el.railAvatar.src = '/api/auth/avatar';
 
     renderStreamSkeleton();
     renderUserSkeleton();

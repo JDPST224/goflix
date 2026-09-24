@@ -4,10 +4,15 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
+
+	"github.com/dop251/goja"
 )
 
 // postJSON posts a JSON body (or none, when body is nil) and parses the JSON
@@ -40,24 +45,6 @@ func (rt *runtime) postJSON(ctx context.Context, path string, headers map[string
 	return out, nil
 }
 
-// postRaw performs the HTTP request and returns the body text.
-func (rt *runtime) postRaw(ctx context.Context, path string, headers map[string]string, body []byte) (string, error) {
-	resp, err := rt.do(ctx, "POST", path, headers, body)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
-		return "", fmt.Errorf("%s: status %d: %s", path, resp.StatusCode, strings.TrimSpace(string(snippet)))
-	}
-	b, err := io.ReadAll(io.LimitReader(resp.Body, 1<<22))
-	if err != nil {
-		return "", err
-	}
-	return string(b), nil
-}
-
 func (rt *runtime) do(ctx context.Context, method, path string, headers map[string]string, body []byte) (*http.Response, error) {
 	abs, err := resolveURL(path, rt.origin)
 	if err != nil {
@@ -87,4 +74,48 @@ func (rt *runtime) do(ctx context.Context, method, path string, headers map[stri
 		return nil, err
 	}
 	return resp, nil
+}
+
+// runAction performs a fetch() call from INSIDE the VM so any fetch wrapper
+// the challenge module installed sees and processes the response, mirroring
+// the embed's own action calls. Returns the (possibly wrapper-transformed)
+// response text.
+func (rt *runtime) runAction(ctx context.Context, path string, headers map[string]string, body []byte) (string, error) {
+	hdrJSON, err := json.Marshal(headers)
+	if err != nil {
+		return "", err
+	}
+	bodyJSON, err := json.Marshal(string(body))
+	if err != nil {
+		return "", err
+	}
+	script := `(function(){
+		__actionOut = null;
+		try { if (typeof __fileLog === "function") __fileLog("runAction: fetch wrapped=" + (fetch !== window.__baseFetch)); } catch(e) {}
+		fetch(` + strconv.Quote(path) + `, {method: "POST", headers: ` + string(hdrJSON) + `, body: ` + string(bodyJSON) + `}).then(function(r){
+			return r.text().then(function(t){ return {status: r.status, text: t}; });
+		}).then(function(v){ __actionOut = {ok: true, v: v}; },
+		      function(e){ __actionOut = {ok: false, err: String(e && e.message || e)}; });
+	})()`
+	if _, err := rt.runSrc(script); err != nil {
+		return "", err
+	}
+	for i := 0; i < 800; i++ {
+		rt.drain(ctx)
+		out := rt.vm.GlobalObject().Get("__actionOut")
+		if out != nil && !goja.IsUndefined(out) && !goja.IsNull(out) {
+			o := out.ToObject(rt.vm)
+			if !o.Get("ok").ToBoolean() {
+				return "", fmt.Errorf("action fetch failed: %s", o.Get("err").String())
+			}
+			v := o.Get("v").ToObject(rt.vm)
+			return v.Get("text").String(), nil
+		}
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-time.After(25 * time.Millisecond):
+		}
+	}
+	return "", errors.New("action fetch timeout")
 }

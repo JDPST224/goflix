@@ -191,6 +191,9 @@ document.addEventListener('DOMContentLoaded', () => {
     // or a player close retires its session server-side so the dashboard
     // never counts a title/server switch as a second device.
     let activeSourceUrl = null;
+    // Measured sustainable stream rate (Mbps, 0 = unknown) from the
+    // resolver's priming pass — used to pick an instant-start tier.
+    let playerBandwidthMbps = 0;
     let episodesRequestId = 0;   // guards against stale season-switch responses (detail modal)
     let playerEpRequestId = 0;   // same for the in-player episode panel
     let currentDetailMovie = null;
@@ -1920,6 +1923,16 @@ document.addEventListener('DOMContentLoaded', () => {
             focusFirstIn(detailModalCard);
         }));
 
+        // Speculatively resolve the media source while the user reads the
+        // synopsis: movies resolve directly; TV resolves the episode the
+        // Play button will open (saved progress, else S1E1).
+        if (movie.type === 'tv') {
+            const prog = getProgress(movie);
+            prefetchSourceEndpoint(movie, prog.season, prog.episode);
+        } else {
+            prefetchSourceEndpoint(movie);
+        }
+
         // Fetch full detail
         fetchDetailData(movie, requestId);
     }
@@ -2247,6 +2260,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 setTimeout(() => launchPlayer(currentDetailMovie, seasonNum, ep.episode_number), 380);
             };
             item.addEventListener('click', playThisEpisode);
+            // The likely next launch from the episode list is a hover —
+            // start resolving that episode's source while the pointer moves
+            // toward the click.
+            item.addEventListener('mouseenter', () => {
+                if (currentDetailMovie) prefetchSourceEndpoint(currentDetailMovie, seasonNum, ep.episode_number);
+            });
             item.addEventListener('keydown', e => {
                 if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); playThisEpisode(); }
             });
@@ -2396,6 +2415,39 @@ document.addEventListener('DOMContentLoaded', () => {
             launchPlayer(movie, prog.season, prog.episode);
         } else {
             launchPlayer(movie);
+        }
+    }
+
+    // ─── Speculative source pre-resolution ────────────────────────────────────
+    // Opening the detail modal is a strong play signal: the user reads the
+    // synopsis for a few seconds before hitting Play. Fire the media-source
+    // resolution for the likely title in the background right away — the
+    // resolver is the slowest startup step (upstream round trips plus
+    // first-segment priming, easily several seconds), so starting it here
+    // means launchPlayer finds the result ready (or nearly ready) and the
+    // player starts without the long spinner. launchPlayer reuses the
+    // entry and falls back to its normal fetch when the prefetch is
+    // missing, stale, or failed.
+    const sourcePrefetch = new Map();   // endpoint -> { at, promise }
+    const sourcePrefetchTTL = 10 * 60 * 1000; // reuse only a fresh resolve
+
+    function prefetchSourceEndpoint(movie, season, episode) {
+        if (!movie || !movie.id) return;
+        const provider = playerServerSelect ? (playerServerSelect.value || 'vidking') : 'vidking';
+        const endpoint = movie.type === 'tv'
+            ? `/api/media/source/${provider}/tv/${encodeURIComponent(movie.id)}/${encodeURIComponent(season)}/${encodeURIComponent(episode)}`
+            : `/api/media/source/${provider}/movie/${encodeURIComponent(movie.id)}`;
+        const cached = sourcePrefetch.get(endpoint);
+        if (cached && Date.now() - cached.at < sourcePrefetchTTL) return;
+        const promise = fetch(endpoint, {
+            method: 'GET',
+            headers: { 'Accept': 'application/json' },
+            credentials: 'same-origin'
+        }).then(r => r.ok ? r.json() : null).catch(() => null);
+        sourcePrefetch.set(endpoint, { at: Date.now(), promise });
+        if (sourcePrefetch.size > 12) {
+            const now = Date.now();
+            sourcePrefetch.forEach((v, k) => { if (now - v.at >= sourcePrefetchTTL) sourcePrefetch.delete(k); });
         }
     }
 
@@ -2997,25 +3049,48 @@ document.addEventListener('DOMContentLoaded', () => {
                 ? `/api/media/source/${provider}/tv/${encodeURIComponent(movie.id)}/${encodeURIComponent(currentPlayerSeason)}/${encodeURIComponent(currentPlayerEpisode)}`
                 : `/api/media/source/${provider}/movie/${encodeURIComponent(movie.id)}`;
 
-            const response = await fetch(endpoint, {
-                method: 'GET',
-                headers: { 'Accept': 'application/json' },
-                credentials: 'same-origin',
-                signal: sourceAbortController.signal
-            });
-
-            let data;
-            try {
-                data = await response.json();
-            } catch (_) {
-                throw new Error(`Resolver returned an invalid response (${response.status})`);
+            let data = null;
+            // Reuse the speculative pre-resolution fired when the detail
+            // modal (or an episode row) opened. The resolve may still be in
+            // flight — awaiting it is still faster than starting a new one
+            // now, since the resolver single-flights fresh resolves of the
+            // same title anyway. A missing/stale/failed prefetch falls
+            // through to the normal fetch below.
+            const pre = sourcePrefetch.get(endpoint);
+            if (pre) {
+                sourcePrefetch.delete(endpoint);
+                if (Date.now() - pre.at < sourcePrefetchTTL) {
+                    const preData = await pre.promise;
+                    if (preData && preData.success && preData.url && preData.type === 'hls') {
+                        data = preData;
+                    }
+                }
             }
+            if (!data) {
+                const response = await fetch(endpoint, {
+                    method: 'GET',
+                    headers: { 'Accept': 'application/json' },
+                    credentials: 'same-origin',
+                    signal: sourceAbortController.signal
+                });
 
+                try {
+                    data = await response.json();
+                } catch (_) {
+                    throw new Error(`Resolver returned an invalid response (${response.status})`);
+                }
+                if (!response.ok) {
+                    throw new Error(data.error || `Resolver returned ${response.status}`);
+                }
+            }
             if (requestId !== playerRequestId) return;
-            if (!response.ok || !data.success || !data.url || data.type !== 'hls') {
+            if (!data.success || !data.url || data.type !== 'hls') {
                 throw new Error(data.error || 'Unable to resolve media source');
             }
             activeSourceUrl = data.url;
+            // Measured sustainable stream rate (Mbps, 0 = unknown) from the
+            // resolver's priming pass — used to pick an instant-start tier.
+            playerBandwidthMbps = Number(data.bw) > 0 ? Number(data.bw) : 0;
 
             // Native engines (smart TV browsers) ignore DOM <track>
             // elements, so their subtitle list must reach the manifest
@@ -3277,7 +3352,11 @@ document.addEventListener('DOMContentLoaded', () => {
                     return;
                 }
                 settleErr(new Error('Playback timed out while loading the stream'));
-            }, 25000);
+                // 45s: the resolver primes the first-play path before handing
+                // the stream over, but the first top-tier segments on a slow
+                // pipe can still take a while; 25s cut healthy loads short
+                // and forced a manual retry.
+            }, 45000);
 
             const settleOk = () => {
                 if (settled) return;
@@ -3461,7 +3540,27 @@ document.addEventListener('DOMContentLoaded', () => {
                         }
                         vixHlsInstance.autoLevelCapping = capIndex;
                     }
-                    vixHlsInstance.startLevel = Math.min(highestLevelIndex, capIndex);
+                    // Instant-start tier: the first fragment must download
+                    // fast or the player sits buffering before the first
+                    // frame. When the resolver measured a sustainable rate,
+                    // open on the highest tier that fits in ~70% of it
+                    // (LAN links measure huge and land on the top tier);
+                    // ABR stays automatic so quality ramps back up to the
+                    // ceiling within seconds.
+                    let startIdx = Math.min(highestLevelIndex, capIndex);
+                    if (playerBandwidthMbps > 0) {
+                        let fit = -1;
+                        for (let i = 0; i < data.levels.length; i++) {
+                            const br = data.levels[i].bitrate || 0;
+                            if (br > 0 && br <= playerBandwidthMbps * 0.7 * 1e6 && i <= capIndex && i > fit) {
+                                fit = i;
+                            }
+                        }
+                        if (fit >= 0) {
+                            startIdx = fit;
+                        }
+                    }
+                    vixHlsInstance.startLevel = startIdx;
                     }
                     applyPlayerTracks(provider);
                     // Start playback as soon as the manifest is parsed — don't

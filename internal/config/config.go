@@ -295,6 +295,10 @@ func applyEnvOverrides(cfg *Config) {
 	if v := os.Getenv("TMDB_API_KEY"); strings.TrimSpace(v) != "" {
 		cfg.TMDBAPIKey = cleanConfigValue(v)
 	}
+	// The vidking direct resolver uses the TMDB credentials as its
+	// metadata source.
+	cfg.Resolver.TMDBAccessToken = cfg.TMDBAccessToken
+	cfg.Resolver.TMDBAPIKey = cfg.TMDBAPIKey
 }
 
 // cleanConfigValue trims whitespace and optional single/double quotes around

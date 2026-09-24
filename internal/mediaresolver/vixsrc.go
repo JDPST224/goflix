@@ -36,7 +36,6 @@ import (
 // variant playlists, audio/subtitle renditions and CDN segments all pass the
 // endpoint's checks.
 
-
 // vixsrcMasterBlockCap bounds how much HTML after the window.masterPlaylist
 // marker is searched for the params/url literals.
 const vixsrcMasterBlockCap = 800
