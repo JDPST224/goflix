@@ -10,6 +10,7 @@ import (
 
 	"goflix/internal/catalog"
 	"goflix/internal/config"
+	"goflix/internal/db"
 	"goflix/internal/mediaresolver"
 	"goflix/internal/server"
 )
@@ -20,6 +21,29 @@ func main() {
 		log.Fatal("Failed to load config.conf: ", configErr)
 	}
 
+	database, err := db.Open(cfg.DBFile)
+	if err != nil {
+		log.Fatal("Failed to open SQLite database: ", err)
+	}
+	defer database.Close()
+	if err := db.EnsureSchema(database); err != nil {
+		log.Fatal("Failed to initialize SQLite schema: ", err)
+	}
+	// Import the legacy JSON stores (users.json, userdata.json,
+	// resolutions.json, catalog_snapshot.json) once; they are retired to
+	// *.migrated afterwards.
+	resolutionsFile := cfg.Resolver.ResolutionCachePath
+	if resolutionsFile == "-" {
+		resolutionsFile = ""
+	} else if resolutionsFile == "" {
+		resolutionsFile = "resolutions.json"
+	}
+	db.Migrate(database, cfg.UsersFile, cfg.UserDataFile, resolutionsFile, cfg.CatalogSnapshotFile)
+
+	// Give the resolver the shared database handle so resolved streams are
+	// persisted (Config.DB); without this the resolution cache lives only in
+	// memory and is lost on every restart.
+	cfg.Resolver.DB = database
 	resolver, resolverErr := mediaresolver.New(cfg.Resolver)
 	if resolverErr != nil {
 		log.Fatal("Failed to initialize media source resolver: ", resolverErr)
@@ -27,12 +51,12 @@ func main() {
 
 	client := catalog.NewClient(cfg.TMDBAccessToken, cfg.TMDBAPIKey)
 	store := catalog.NewStore(client)
-	store.SetSnapshotPath(cfg.CatalogSnapshotFile)
-	// Serve the last good catalog from disk immediately; the refresh loop
-	// below replaces it once TMDB answers.
+	store.SetSnapshotDB(database)
+	// Serve the last good catalog from the database immediately; the refresh
+	// loop below replaces it once TMDB answers.
 	store.LoadSnapshot()
 
-	// Server-side subtitle ladder: VidKing ships no embedded
+	// Server-side subtitle ladder: Movish ships no embedded
 	// subtitle renditions, so resolve external subtitles during Resolve() and embed
 	// them into the master manifest for native-HLS engines (smart TVs).
 	resolver.SubRenditionProvider = func(ctx context.Context, req mediaresolver.MediaRequest) []mediaresolver.SubRendition {
@@ -75,8 +99,8 @@ func main() {
 		Store:             store,
 		Client:            client,
 		StartedAt:         time.Now(),
-		Auth:              server.NewAuthStore(cfg.UsersFile, cfg.AuthPassword),
-		UserData:          server.NewUserDataStore(cfg.UserDataFile),
+		Auth:              server.NewAuthStore(database, cfg.AuthPassword),
+		UserData:          server.NewUserDataStore(database),
 		DebugProfiling:    cfg.DebugProfiling,
 		AuthRatePerMin:    cfg.AuthRatePerMin,
 		ResolveRatePerMin: cfg.ResolveRatePerMin,

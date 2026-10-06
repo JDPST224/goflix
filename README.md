@@ -10,10 +10,16 @@ players alike.
 - **Catalog** — trending and categorized rows for movies and TV, search,
   detail pages with seasons/episodes (TMDB API), poster/backdrop images served
   through a disk-cached `/api/img` proxy so browsing is LAN-fast.
-- **Multi-provider sources** — VixSrc, VidKing, CineSrc and VidSrcMe
+- **Multi-provider sources** — VixSrc, Movy, Movish, CineSrc and VidSrcMe
   are resolved directly against their endpoints for fast startup; if that
   fails, a headless-Chrome scrape of the provider page takes over
-  automatically.
+  automatically. Movy exposes per-title quality tiers up to 2160p across
+  its upstream nodes (Miami/Boise) and is tried first. VidSrcMe's backend
+  transcodes everything to one ~128 kbps
+  stereo audio track, so its resolutions are quality-gated: YIFY/YTS release
+  names are flagged outright and the muxed audio of the resolved stream is
+  measured, then the title is rerouted to another provider with a proper
+  encode first — the flagged VidSrcMe source stays as the last resort.
 - **Streaming proxy** — token-authenticated reverse proxy with an in-memory
   segment cache and read-ahead warming: playback starts from RAM instead of
   waiting on cold upstream fetches. Range requests supported for instant
@@ -80,15 +86,16 @@ parsed leniently — an invalid value falls back to the default.
 | `CACHE_MAX_MB` | `512` | RAM cap for the manifest/segment body cache |
 | `MAX_STREAM_HEIGHT` | `0` (off) | Cap playback resolution (e.g. `1080`); ABR stays automatic below the cap. Multiplies concurrent capacity on a fixed pipe |
 | `AUTH_PASSWORD` | — | Registration invite code; unset = open registration. Browsing never requires it |
-| `USERS_FILE` | `users.json` | Accounts + sessions store (`-` = memory only) |
-| `USERDATA_FILE` | `userdata.json` | Per-account synced data store (`-` = memory only) |
-| `RESOLUTION_CACHE_FILE` | `resolutions.json` | Resolution cache persistence (`-` = memory only) |
-| `CATALOG_SNAPSHOT_FILE` | `catalog_snapshot.json` | Catalog caches persisted across restarts (`-` = off) |
+| `USERS_FILE` | `users.json` | Legacy JSON accounts file; imported into the SQLite database on first run and renamed `*.migrated` |
+| `USERDATA_FILE` | `userdata.json` | Legacy JSON userdata file; imported into the SQLite database on first run and renamed `*.migrated` |
+| `DB_FILE` | `goflix.db` | SQLite database for accounts, sessions, synced userdata, the resolution cache and the catalog snapshot (`-` = memory only) |
+| `RESOLUTION_CACHE_FILE` | `resolutions.json` | Legacy JSON resolution cache; imported into the SQLite database on first run and renamed `*.migrated` |
+| `CATALOG_SNAPSHOT_FILE` | `catalog_snapshot.json` | Legacy JSON catalog snapshot; imported into the SQLite database on first run and renamed `*.migrated` |
 | `IMAGES_DIR` | `-` (off) | Disk cache for the `/api/img` poster proxy (`-` = redirect to the TMDB CDN; set a folder name to cache posters on disk) |
 | `AUTH_RATE_PER_MIN` / `RESOLVE_RATE_PER_MIN` | `10` / `10` | Per-IP rate limits (login+register / media resolutions). `0`/unset → 10; the default is applied by the server layer (`server.New`), not by the config parser |
 | `TLS_CERT` / `TLS_KEY` | — | Serve HTTPS when both set; session cookies become `Secure` |
 | `DEBUG_PPROF` | `false` | Mount Go pprof endpoints under `/debug/pprof/` |
-| `VIXSRC_ORIGIN` / `VIDKING_ORIGIN` / `VIDSRCME_ORIGIN` / `VIDSRCME_DATA_ORIGIN` / `CINESRC_ORIGIN` | provider URLs | Override media source origins |
+| `VIXSRC_ORIGIN` / `MOVY_ORIGIN` / `VIDSRCME_ORIGIN` / `VIDSRCME_DATA_ORIGIN` / `CINESRC_ORIGIN` | provider URLs | Override media source origins |
 
 ## Smart-TV playback
 
@@ -113,7 +120,7 @@ internal/subtitles/         OpenSubtitles search client, SRT→WebVTT converter
 internal/mediaresolver/     the media pipeline:
     resolver.go               Resolve() orchestration, sessions, config
     resolution_cache.go       instant-rewatch cache: validate/heal, prewarm, persist
-    cinesrc/vidking/vidsrcme/vixsrc.go per-provider direct resolvers
+    cinesrc/movish/movy/vidsrcme/vixsrc.go per-provider direct resolvers
     browser.go                headless-Chrome fallback scrape
     proxy.go                  the streaming reverse-proxy endpoint
     manifest.go               manifest rewriting + subtitle rendition embedding
@@ -134,15 +141,15 @@ static/login.html + js/     sign-in / registration page
 - `GET /api/search?q=&type=` · `/api/detail?type=&id=` · `/api/episodes?id=&season=`
 - `GET /api/img?u=<tmdb-image-url>` — disk-cached image proxy (host-allowlisted)
 - `GET /api/media/source/<provider>/movie/<tmdbId>` and `/tv/<id>/<s>/<e>`
-  (`provider` ∈ cinesrc | vixsrc | vidking | vidsrcme); legacy unprefixed routes map
+  (`provider` ∈ cinesrc | vixsrc | movish | movy | vidsrcme); legacy unprefixed routes map
   to VixSrc
 - `GET /embed/movie/<tmdbId>` and `GET /embed/tv/<id>[?s=<s>&e=<e>]` — direct CineSrc embed resolution (redirects to stream or returns JSON)
 - `GET /api/media/proxy/<token>.m3u8?url=...` — HLS proxy (supports Range)
 - `POST /api/media/invalidate/<token>` — drop the remembered resolution behind a session (stale-link healing)
 - `POST /api/media/subs/<token>` — register extra subtitle renditions on a
   live session; the resolver embeds its own ladder automatically for
-  cinesrc/vidking/vidsrcme, this tops it up
-- `GET /api/subtitles/cinesrc|vidking|vidsrcme?type=&id=&season=&episode=` — search
+  cinesrc/movish/movy/vidsrcme, this tops it up
+- `GET /api/subtitles/cinesrc|movish|movy|vidsrcme?type=&id=&season=&episode=` — search
 - `GET /api/subtitles/cinesrc/download?url=` ·
   `GET /api/subtitles/opensubtitles/download?url=` ·
   `GET /api/subtitles/vidsrcme/download?url=` — WebVTT download/convert
@@ -172,9 +179,8 @@ static/login.html + js/     sign-in / registration page
 - The **first registered account is admin** and manages accounts at
   `/account` (change password, list users, force sign-out, delete).
 - State files (all safe to delete while the server is stopped):
-  `users.json` (accounts/sessions), `userdata.json` (synced data),
-  `resolutions.json` (resolution cache), `catalog_snapshot.json` (catalog),
-  `images/` (poster cache).
+  `goflix.db` (SQLite: accounts/sessions/synced userdata/resolution cache/
+  catalog snapshot), `images/` (poster cache).
 
 ## Troubleshooting
 
@@ -270,7 +276,7 @@ You can customize the probe target and test scope using environment variables:
 
 | Variable | Default | Description |
 | :--- | :--- | :--- |
-| `BW_PROVIDERS` | *all* | Comma-separated list of providers to test: `cinesrc`, `vixsrc`, `vidking`, `vidsrcme` |
+| `BW_PROVIDERS` | *all* | Comma-separated list of providers to test: `cinesrc`, `vixsrc`, `movish`, `movy`, `vidsrcme` |
 | `BW_TYPE` | `movie` | Media type: `movie` or `tv` |
 | `BW_ID` | `27205` | TMDB ID (e.g. `550` for *Fight Club*, `1396` for *Breaking Bad*, `27205` for *Inception*) |
 | `BW_SEASON` | `1` | TV show season number (when `BW_TYPE=tv`) |
@@ -289,15 +295,25 @@ You can customize the probe target and test scope using environment variables:
   $env:BW_PROVIDERS="vixsrc"; $env:BW_TYPE="movie"; $env:BW_ID="550"; go test -v -count=1 -run TestBandwidth ./internal/mediaresolver -timeout 3m
   ```
 
-**2. Test a TV Show Episode (e.g. Breaking Bad S01E01 on VidKing and VidSrcMe):**
+**2. Test a TV Show Episode (e.g. Breaking Bad S01E01 on Movy and VidSrcMe):**
 
 * **Linux / macOS:**
   ```bash
-  BW_PROVIDERS=vidking,vidsrcme BW_TYPE=tv BW_ID=1396 BW_SEASON=1 BW_EPISODE=1 go test -v -count=1 -run TestBandwidth ./internal/mediaresolver -timeout 5m
+  BW_PROVIDERS=movy,vidsrcme BW_TYPE=tv BW_ID=1396 BW_SEASON=1 BW_EPISODE=1 go test -v -count=1 -run TestBandwidth ./internal/mediaresolver -timeout 5m
   ```
 * **Windows (PowerShell):**
   ```powershell
-  $env:BW_PROVIDERS="vidking,vidsrcme"; $env:BW_TYPE="tv"; $env:BW_ID="1396"; $env:BW_SEASON="1"; $env:BW_EPISODE="1"; go test -v -count=1 -run TestBandwidth ./internal/mediaresolver -timeout 5m
+  $env:BW_PROVIDERS="movy,vidsrcme"; $env:BW_TYPE="tv"; $env:BW_ID="1396"; $env:BW_SEASON="1"; $env:BW_EPISODE="1"; go test -v -count=1 -run TestBandwidth ./internal/mediaresolver -timeout 5m
+  ```
+
+Movy is walked server by server (Miami, Boise, Houston, … — one row per
+upstream node, shared metadata/seed fetched once), so a movy-only run for a
+4K title is the most informative sweep. TMDB credentials are read from the
+environment when set, or auto-loaded from the project's `config.conf`:
+
+* **Linux / macOS:**
+  ```bash
+  BW_PROVIDERS=movy BW_TYPE=movie BW_ID=1492640 go test -v -count=1 -run TestBandwidth ./internal/mediaresolver -timeout 15m
   ```
 
 #### Understanding the Benchmark Report
@@ -307,14 +323,17 @@ At the end of the test, GoFlix prints a tabular performance summary:
 ```text
 === Upstream server bandwidth report ===
 SERVER           TIER       CDN HOST            RESOLVED ms  PING ms  TTFB ms  BANDWIDTH Mbps  SEGS  MB
-vidking/YORU     1080p      moon.peakstorm.top  11160        67       784      44.9            4     13.65
-vidsrcme         1920x800   comityofcognomen.site 2133       55       98       42.3            4     4.78
+movy/Miami       2160p      moon.zenoak.top     1878         55       172      82.9            4     11.04
+movy/Boise       2160p      moon.zenoak.top     652          51       77       150.8           4     11.04
+movy/Orlando     1080p      dawn-dew-….workers.dev 1255      35       53       69.3            4     3.36
+movish/Rigel     1080p      cdn.dlproxy.com     2860         55       961      11.1            6     18.51
 vixsrc           1920x1080  vixsrc.to           1529         152      928      4.4             2     2.18
 
-Fastest upstream: vidking/YORU at 44.9 Mbit/s (single sequential connection)
+Fastest upstream: movy/Boise at 150.8 Mbit/s (single sequential connection)
 ```
 
-* **SERVER**: The provider and specific sub-server probed (e.g. VidKing sub-servers like `YORU`, `BREACH`, etc.).
+* **SERVER**: The provider and, for movy, the specific upstream node probed
+  (`Miami`, `Boise`, `Houston`, …; Movish exposes `Rigel`, `Lyra`, `Algol`).
 * **TIER**: The stream resolution chosen (`2160p`, `1080p`, `1920x1080`, `auto`).
 * **CDN HOST**: The edge CDN host serving the media segments.
 * **RESOLVED ms**: Time in milliseconds to complete direct API resolution and extract the manifest.
@@ -347,3 +366,6 @@ Fastest upstream: vidking/YORU at 44.9 Mbit/s (single sequential connection)
 > **Security:** if your `config.conf` holds real TMDB credentials, treat them
 > like passwords — don't share the file. Rotate any key that has ever been
 > exposed.
+
+
+

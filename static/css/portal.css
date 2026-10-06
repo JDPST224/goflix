@@ -1,0 +1,137 @@
+/* Shared shell for the account and admin surfaces. Kept separate from the
+   viewing UI so management screens stay calm, focused and readable. */
+:root {
+    --portal-surface: rgba(30, 30, 33, 0.88);
+    --portal-border: rgba(255, 255, 255, 0.10);
+    --portal-muted: #aaa;
+}
+
+body {
+    background:
+        radial-gradient(circle at 15% 0%, rgba(229, 9, 20, 0.12), transparent 31rem),
+        radial-gradient(circle at 100% 80%, rgba(94, 112, 170, 0.10), transparent 28rem),
+        #111;
+}
+
+.shell { width: min(1040px, 100%); }
+
+.wordmark {
+    text-align: left;
+    margin-bottom: 34px;
+}
+
+.profile-head {
+    padding: 20px 22px;
+    border: 1px solid var(--portal-border);
+    border-radius: 18px;
+    background: rgba(24, 24, 26, 0.72);
+    box-shadow: 0 18px 50px rgba(0, 0, 0, 0.22);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+}
+
+.profile-head { margin-bottom: 22px; }
+
+.identity h1 { letter-spacing: -0.35px; }
+.identity .email { color: var(--portal-muted); }
+
+.head-actions { align-items: center; flex-wrap: wrap; justify-content: flex-end; }
+
+.head-actions .btn.ghost {
+    min-height: 40px;
+    border-radius: 10px;
+}
+
+.head-actions .btn.ghost:first-child {
+    background: #fff;
+    border-color: #fff;
+    color: #111;
+}
+
+.head-actions .btn.ghost:first-child:hover {
+    background: #f2f2f2;
+    color: #111;
+}
+
+.card {
+    background: var(--portal-surface);
+    border: 1px solid var(--portal-border);
+    box-shadow: 0 18px 48px rgba(0, 0, 0, 0.27);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+}
+
+.card::before { opacity: 0.55; }
+.card h2 { font-size: 1.08rem; }
+
+/* Account */
+.profile-head { position: relative; }
+.avatar-btn { box-shadow: 0 8px 22px rgba(0,0,0,0.28); }
+.card-sub { max-width: 62ch; line-height: 1.5; }
+.danger-card { border-color: rgba(229, 9, 20, 0.22); }
+
+@media (max-width: 720px) {
+    body { padding: 20px 12px 36px; }
+    .wordmark { margin: 4px 8px 22px; }
+    .profile-head { padding: 18px; border-radius: 15px; }
+    .head-actions { width: 100%; justify-content: flex-start; }
+    .card { border-radius: 15px; padding: 20px; }
+}
+
+@media (max-width: 480px) {
+    .profile-head { gap: 13px; }
+    .profile-head .head-actions { margin-top: 2px; }
+    .head-actions .btn { flex: 1 1 auto; padding-inline: 12px; }
+    .card { padding: 18px; }
+}
+
+/* ── Confirm dialog (shared look with the admin console) ────── */
+.modal-veil {
+    position: fixed; inset: 0; z-index: 400;
+    display: none; align-items: center; justify-content: center;
+    padding: 20px;
+    background: rgba(4, 5, 7, 0.72);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+}
+.modal-veil.show { display: flex; animation: veilIn 0.18s ease both; }
+@keyframes veilIn { from { opacity: 0; } to { opacity: 1; } }
+.modal {
+    width: min(430px, 100%);
+    background: var(--portal-surface);
+    border: 1px solid var(--portal-border);
+    border-radius: 16px;
+    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.62);
+    overflow: hidden;
+    animation: modalIn 0.26s cubic-bezier(0.33, 1, 0.68, 1) both;
+}
+@keyframes modalIn { from { opacity: 0; transform: translateY(14px) scale(0.975); } to { opacity: 1; transform: none; } }
+.modal-body { display: flex; gap: 14px; padding: 22px 22px 18px; }
+.modal-ico {
+    width: 38px; height: 38px; flex: 0 0 auto;
+    display: grid; place-items: center;
+    border-radius: 11px;
+    background: rgba(229, 9, 20, 0.12);
+    border: 1px solid rgba(229, 9, 20, 0.28);
+    color: #ff6b72;
+}
+.modal-ico svg {
+    width: 19px; height: 19px;
+    fill: none; stroke: currentColor; stroke-width: 1.9;
+    stroke-linecap: round; stroke-linejoin: round;
+}
+.modal-text { min-width: 0; }
+.modal-text h3 { font-size: 1rem; font-weight: 700; margin: 0 0 5px; }
+.modal-text p { font-size: 0.82rem; color: var(--portal-muted); line-height: 1.55; margin: 0; }
+.modal-foot {
+    display: flex; justify-content: flex-end; gap: 8px;
+    padding: 14px 22px;
+    background: rgba(255, 255, 255, 0.018);
+    border-top: 1px solid var(--portal-border);
+}
+.btn.danger.solid {
+    background: rgba(229, 9, 20, 0.85);
+    border-color: rgba(229, 9, 20, 0.85);
+    color: #fff;
+}
+.btn.danger.solid:hover { background: #e50914; border-color: #e50914; }
